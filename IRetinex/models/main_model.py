@@ -88,6 +88,7 @@ class IRetinex(nn.Module):
         self.rcm = RCM(64)
     
     def forward(self, x: torch.Tensor) -> tuple:
+        # ICRR模块：初始化L和R
         L_init = self.dual_color(x)
         R_init = self.reflectance_decomp(x, L_init)
         
