@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
+from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import structural_similarity as ssim
 
 def save_model(model, path, epoch=None):
     """保存模型权重"""
@@ -52,3 +54,15 @@ def visualize_results(original, enhanced, target, save_path=None):
         plt.close()
     else:
         plt.show()
+
+def calculate_psnr(pred, gt):
+    """计算单张图像的PSNR（输入为0-255的numpy数组，RGB格式）"""
+    pred = pred.astype(np.uint8)
+    gt = gt.astype(np.uint8)
+    return psnr(gt, pred, data_range=255)
+
+def calculate_ssim(pred, gt):
+    """计算单张图像的SSIM（输入为0-255的numpy数组，RGB格式）"""
+    pred = pred.astype(np.uint8)
+    gt = gt.astype(np.uint8)
+    return ssim(gt, pred, data_range=255, channel_axis=-1)

@@ -69,6 +69,7 @@ class ReflectanceDecomposition(nn.Module):
 
 # ======================
 # 3. Inter-component Residual Reduction (ICRR)
+# 实际未使用
 # ======================
 class ICRR(nn.Module):
     """互成分残差缩减模块 (ICRR) - 严格遵循论文3.3节"""
