@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from models import IRetinex
 from utils import load_model, visualize_results
+import torchvision.transforms as transforms
 
 def test(model_path, input_path, output_path):
     """测试模型并保存结果"""

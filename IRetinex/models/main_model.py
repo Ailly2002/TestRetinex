@@ -61,13 +61,13 @@ class RCM(nn.Module):
         L_super = self.ses(L)
         R_super = self.ses(R)
         
-        Qr = self.mres_l.q_layer(R)
-        Kl = self.mres_l.k_layer(L)
+        Qr = self.mres_l.q_layer(R_super)
+        Kl = self.mres_l.k_layer(L_super)
         Vr = self.mres_l.v_layer(R)
         residual_L = self.mres_l(Qr, Kl, Vr)
         
-        Ql = self.mres_r.q_layer(L)
-        Kr = self.mres_r.k_layer(R)
+        Ql = self.mres_r.q_layer(L_super)
+        Kr = self.mres_r.k_layer(R_super)
         Vl = self.mres_r.v_layer(L)
         residual_R = self.mres_r(Ql, Kr, Vl)
         
