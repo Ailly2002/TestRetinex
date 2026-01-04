@@ -64,14 +64,15 @@ class RetinexDataset(data.Dataset):
         # 加载低光图像（Input）
         input_path = self.input_list[index]
         input_img = Image.open(input_path).convert('RGB')
-        input_img = input_img.resize((self.size, self.size), Image.ANTIALIAS)
+        # input_img = input_img.resize((self.size, self.size), Image.ANTIALIAS)
+        input_img = input_img.resize((self.size, self.size), Image.Resampling.LANCZOS)
         input_img = (np.asarray(input_img) / 255.0).astype(np.float32)
         input_img = torch.from_numpy(input_img).permute(2, 0, 1)  # (H,W,C) → (C,H,W)
 
         # 加载正常光照图像（GT）
         gt_path = self.gt_list[index]
         gt_img = Image.open(gt_path).convert('RGB')
-        gt_img = gt_img.resize((self.size, self.size), Image.ANTIALIAS)
+        gt_img = gt_img.resize((self.size, self.size), Image.Resampling.LANCZOS)
         gt_img = (np.asarray(gt_img) / 255.0).astype(np.float32)
         gt_img = torch.from_numpy(gt_img).permute(2, 0, 1)
 

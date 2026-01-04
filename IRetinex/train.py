@@ -10,9 +10,9 @@ import torch.optim
 from torch.optim import optimizer
 from torch.utils.tensorboard import SummaryWriter
 from models import IRetinex, MultiScaleConsistencyLoss
-# from data_loader import get_dataloader
 import data_loader
 from utils import save_model, visualize_results, calculate_psnr, calculate_ssim, load_model
+import datetime  # 新增：用于获取当前时间
 
 
 def weights_init(m):
@@ -25,6 +25,29 @@ def weights_init(m):
 
 
 def train(config):
+    # 获取当前时间作为文件夹名
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    snapshot_dir = os.path.join("snapshot", timestamp)
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    # 创建记录文件
+    log_file = os.path.join(snapshot_dir, f"training_log_{timestamp}.txt")
+
+    # 写入基础信息
+    with open(log_file, 'w') as f:
+        f.write(f"Training Start Time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Data Root: Input={config.input_root}, GT={config.gt_root}\n")
+        f.write(f"Image Size: {config.image_size}\n")
+        f.write(f"Learning Rate: {config.lr}\n")
+        f.write(f"Weight Decay: {config.weight_decay}\n")
+        f.write(f"Gradient Clip Norm: {config.grad_clip_norm}\n")
+        f.write(f"Number of Epochs: {config.num_epochs}\n")
+        f.write(f"Batch Size: {config.train_batch_size}\n")
+        f.write(f"Number of Workers: {config.num_workers}\n")
+        f.write(f"Display Iter: {config.display_iter}\n")
+        f.write(f"Snapshot Iter: {config.snapshot_iter}\n")
+
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     cudnn.benchmark = True
 
@@ -56,9 +79,7 @@ def train(config):
     )
 
     # 损失函数（可根据需求替换为L1/SSIM等）
-    # criterion = nn.MSELoss().cuda()
     criterion = MultiScaleConsistencyLoss().cuda()
-
 
     # 记录全程最优指标
     best_psnr = 0.0
@@ -133,7 +154,7 @@ def train(config):
             best_ssim = avg_epoch_ssim
             best_epoch = epoch + 1
             # 保存最优模型
-            save_model(retinex_net, os.path.join(config.snapshots_folder, "best_model.pth"), epoch + 1)
+            save_model(retinex_net, os.path.join(snapshot_dir, f"best_model_{timestamp}.pth"), epoch + 1)
 
         # 打印当前epoch完整指标
         print("=" * 50)
@@ -145,32 +166,46 @@ def train(config):
 
         # 保存模型快照
         if (epoch + 1) % config.snapshot_iter == 0:
-            snapshot_path = os.path.join(config.snapshots_folder, f"Epoch_{epoch + 1}.pth")
+            snapshot_path = os.path.join(snapshot_dir, f"Epoch_{epoch + 1}_{timestamp}.pth")
             save_model(retinex_net, snapshot_path, epoch + 1)
 
-        # 训练全程结束：输出汇总指标
-        print("\n" + "=" * 60)
-        print("Training Complete - Summary Metrics")
-        print("=" * 60)
-        print(f"Total Epochs Trained: {config.num_epochs}")
-        print(f"Best Epoch: {best_epoch} | Best PSNR: {best_psnr:.2f} dB | Best SSIM: {best_ssim:.4f}")
-        # 输出最后10轮平均指标（可选）
+    # 训练结束，更新日志文件
+    with open(log_file, 'a') as f:
+        f.write(f"\nTraining End Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total Epochs Trained: {config.num_epochs}\n")
+        f.write(f"Best Epoch: {best_epoch} | Best PSNR: {best_psnr:.2f} dB | Best SSIM: {best_ssim:.4f}\n")
+        # 输出最后10轮平均指标
         if len(epoch_metrics) >= 10:
             last_10_metrics = epoch_metrics[-10:]
             avg_last10_loss = np.mean([m['loss'] for m in last_10_metrics])
             avg_last10_psnr = np.mean([m['psnr'] for m in last_10_metrics])
             avg_last10_ssim = np.mean([m['ssim'] for m in last_10_metrics])
-            print(
-                f"Last 10 Epochs Avg - Loss: {avg_last10_loss:.6f}, PSNR: {avg_last10_psnr:.2f} dB, SSIM: {avg_last10_ssim:.4f}")
-        print("=" * 60)
+            f.write(
+                f"Last 10 Epochs Avg - Loss: {avg_last10_loss:.6f}, PSNR: {avg_last10_psnr:.2f} dB, SSIM: {avg_last10_ssim:.4f}\n")
+        f.write("=" * 60 + "\n")
+
+    # 打印总结信息
+    print("\n" + "=" * 60)
+    print("Training Complete - Summary Metrics")
+    print("=" * 60)
+    print(f"Total Epochs Trained: {config.num_epochs}")
+    print(f"Best Epoch: {best_epoch} | Best PSNR: {best_psnr:.2f} dB | Best SSIM: {best_ssim:.4f}")
+    if len(epoch_metrics) >= 10:
+        last_10_metrics = epoch_metrics[-10:]
+        avg_last10_loss = np.mean([m['loss'] for m in last_10_metrics])
+        avg_last10_psnr = np.mean([m['psnr'] for m in last_10_metrics])
+        avg_last10_ssim = np.mean([m['ssim'] for m in last_10_metrics])
+        print(
+            f"Last 10 Epochs Avg - Loss: {avg_last10_loss:.6f}, PSNR: {avg_last10_psnr:.2f} dB, SSIM: {avg_last10_ssim:.4f}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # 数据根目录参数（核心修改：指定根目录，按相对路径匹配）
-    parser.add_argument('--input_root', type=str, default="E:\Low-LightDatasets\Videos\DID\input")  # Input根目录
-    parser.add_argument('--gt_root', type=str, default="E:\Low-LightDatasets\Videos\DID\GT")  # GT根目录
+    parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Videos/DID/input")  # Input根目录
+    parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Videos/DID/GT")  # GT根目录
     parser.add_argument('--image_size', type=int, default=512)
 
     # 训练超参数
@@ -184,14 +219,11 @@ if __name__ == "__main__":
     # 日志与快照参数
     parser.add_argument('--display_iter', type=int, default=10)
     parser.add_argument('--snapshot_iter', type=int, default=10)
-    parser.add_argument('--snapshots_folder', type=str, default="snapshots_Retinex/")
+    parser.add_argument('--snapshots_folder', type=str, default="snapshots_Retinex/")  # 这个参数现在不再使用
     parser.add_argument('--load_pretrain', type=bool, default=False)
     parser.add_argument('--pretrain_dir', type=str, default="snapshots_Retinex/Epoch_99.pth")
 
     config = parser.parse_args()
-
-    # 创建快照文件夹
-    os.makedirs(config.snapshots_folder, exist_ok=True)
 
     # 启动训练
     train(config)
