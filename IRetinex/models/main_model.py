@@ -161,7 +161,9 @@ class IRetinex(nn.Module):
         enhanced = L_final * R_final
 
         # 重建中间结果（用于损失计算）
-        L_list = [self.feature_reconstructor_l(feat) for feat in L_feat_list[:-1]]
-        R_list = [self.feature_reconstructor_r(feat) for feat in R_feat_list[:-1]]
+        # L_list = [self.feature_reconstructor_l(feat) for feat in L_feat_list[:-1]]
+        # R_list = [self.feature_reconstructor_r(feat) for feat in R_feat_list[:-1]]
+        L_list = L_feat_list[:-1]  # 5个尺度的64通道特征 (batch, 64, H, W)
+        R_list = R_feat_list[:-1]  # 5个尺度的64通道特征 (batch, 64, H, W)
 
         return enhanced, L_list, R_list

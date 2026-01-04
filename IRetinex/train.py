@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.optim
+from torch.nn import MSELoss
 from torch.optim import optimizer
 from torch.utils.tensorboard import SummaryWriter
 from models import IRetinex, MultiScaleConsistencyLoss
@@ -79,7 +80,8 @@ def train(config):
     )
 
     # 损失函数（可根据需求替换为L1/SSIM等）
-    criterion = MultiScaleConsistencyLoss().cuda()
+    # criterion = MSELoss().cuda()
+    multi_scale_loss = MultiScaleConsistencyLoss().cuda()
 
     # 记录全程最优指标
     best_psnr = 0.0
@@ -104,10 +106,13 @@ def train(config):
             gt_img = gt_img.cuda()
 
             # 前向传播
-            output_img = retinex_net(input_img)  # 模型输出增强图
+            enhanced, L_list, R_list = retinex_net(input_img)
+            # output_img = retinex_net(input_img)  # 模型输出增强图
 
             # 计算损失（增强图 vs GT图）
-            loss = criterion(output_img, gt_img)
+            # loss = criterion(output_img, gt_img)
+            loss = multi_scale_loss(L_list, R_list, gt_img)
+
             epoch_loss += loss.item()
 
             # 反向传播
@@ -118,7 +123,7 @@ def train(config):
 
             # 计算当前batch的PSNR和SSIM
             # 1. 将tensor转为0-255的numpy数组（RGB格式，HWC）
-            output_np = output_img.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
+            output_np = enhanced.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
             gt_np = gt_img.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
 
             # 2. 遍历batch内每张图片计算指标
@@ -204,16 +209,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # 数据根目录参数（核心修改：指定根目录，按相对路径匹配）
-    parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Videos/DID/input")  # Input根目录
-    parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Videos/DID/GT")  # GT根目录
-    parser.add_argument('--image_size', type=int, default=512)
+    parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/DID_light/Input")  # Input根目录
+    parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/DID_light/GT")  # GT根目录
+    parser.add_argument('--image_size', type=int, default=128)
 
     # 训练超参数
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--grad_clip_norm', type=float, default=0.1)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数

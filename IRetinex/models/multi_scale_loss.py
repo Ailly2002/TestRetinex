@@ -15,18 +15,18 @@ class MultiScaleConsistencyLoss(nn.Module):
                 nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
             ) for _ in range(5)
         ])
-    
+
     def forward(self, L_list: list, R_list: list, target: torch.Tensor) -> torch.Tensor:
         loss = 0.0
         for j in range(5):
             Ij_r = self.conv_r[j](R_list[j])
             Ij_l = self.conv_l[j](L_list[j])
             Ij = Ij_r * Ij_l
-            
+
             Ij_up = Ij
             for _ in range(4 - j):
                 Ij_up = self.upsamplers[_](Ij_up)
-            
+
             loss += F.l1_loss(Ij_up, target)
-        
+
         return loss
