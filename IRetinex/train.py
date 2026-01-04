@@ -6,7 +6,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
-import torch.optim
+import torch.optim as optim
 from torch.nn import MSELoss
 from torch.optim import optimizer
 from torch.utils.tensorboard import SummaryWriter
@@ -82,6 +82,13 @@ def train(config):
     # 损失函数（可根据需求替换为L1/SSIM等）
     # criterion = MSELoss().cuda()
     multi_scale_loss = MultiScaleConsistencyLoss().cuda()
+
+    # 优化器实例化
+    optimizer = optim.Adam(
+        retinex_net.parameters(),
+        lr=config.lr,
+        weight_decay=config.weight_decay
+    )
 
     # 记录全程最优指标
     best_psnr = 0.0
