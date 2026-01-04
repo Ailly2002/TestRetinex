@@ -76,6 +76,9 @@ class RetinexDataset(data.Dataset):
         gt_img = (np.asarray(gt_img) / 255.0).astype(np.float32)
         gt_img = torch.from_numpy(gt_img).permute(2, 0, 1)
 
+        # print("Input img size:", input_img.shape)  # 输入图像尺寸
+        # print("GT img size:", gt_img.shape)  # GT图像尺寸
+
         return input_img, gt_img
 
     def __len__(self):

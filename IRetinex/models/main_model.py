@@ -47,7 +47,8 @@ class FFN(nn.Module):
     """前馈网络 (FFN) - 论文3.4节"""
     def __init__(self, channels: int):
         super(FFN, self).__init__()
-        self.conv1 = nn.Conv2d(channels, channels, 3, 1, 1)
+        # FFN层当中一层stride=2的卷积实现尺度减半
+        self.conv1 = nn.Conv2d(channels, channels, 3, 2, 1)
         self.conv2 = nn.Conv2d(channels, channels, 3, 1, 1)
         self.conv3 = nn.Conv2d(channels, channels, 3, 1, 1)
         self.gelu = nn.GELU()
@@ -165,5 +166,9 @@ class IRetinex(nn.Module):
         # R_list = [self.feature_reconstructor_r(feat) for feat in R_feat_list[:-1]]
         L_list = L_feat_list[:-1]  # 5个尺度的64通道特征 (batch, 64, H, W)
         R_list = R_feat_list[:-1]  # 5个尺度的64通道特征 (batch, 64, H, W)
+
+        print("L_list各元素尺寸：")
+        for i, L in enumerate(L_list):
+            print(f"L_{i} size: {L.shape}")
 
         return enhanced, L_list, R_list

@@ -24,7 +24,7 @@ class MultiScaleConsistencyLoss(nn.Module):
             Ij = Ij_r * Ij_l
 
             Ij_up = Ij
-            for _ in range(4 - j):
+            for _ in range(j):
                 Ij_up = self.upsamplers[_](Ij_up)
 
             loss += F.l1_loss(Ij_up, target)
