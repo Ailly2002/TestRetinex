@@ -23,7 +23,8 @@ class MultiScaleConsistencyLoss(nn.Module):
     def forward(self, L_list: list, R_list: list, target: torch.Tensor) -> torch.Tensor:
         # 确保输入是后5个RCM的输出
         assert len(L_list) == 5 and len(R_list) == 5, "输入必须包含5个RCM输出特征"
-        loss = 0.0
+        # loss = 0.0
+        loss = torch.tensor(0.0, device=target.device)
         target_h, target_w = target.shape[2:]  # 原始目标图像尺寸
 
         for j in range(5):
