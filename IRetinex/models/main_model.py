@@ -204,11 +204,11 @@ class IRetinex(nn.Module):
         enhanced = self.final_upsample(enhanced_half)  # 128×128 → 256×256
 
         # 调试：打印关键尺寸
-        print(f"输入图像尺寸: {x.shape}")
-        print(f"1/2尺寸增强图: {enhanced_half.shape}")
-        print(f"最终增强图尺寸: {enhanced.shape}")
-        print("后5个RCM的L特征尺寸：")
-        for i, feat in enumerate(L_list):
-            print(f"第{i + 5}个RCM - L特征尺寸: {feat.shape}")
+        # print(f"输入图像尺寸: {x.shape}")
+        # print(f"1/2尺寸增强图: {enhanced_half.shape}")
+        # print(f"最终增强图尺寸: {enhanced.shape}")
+        # print("后5个RCM的L特征尺寸：")
+        # for i, feat in enumerate(L_list):
+        #     print(f"第{i + 5}个RCM - L特征尺寸: {feat.shape}")
 
         return enhanced, L_list, R_list

@@ -219,7 +219,7 @@ def train(config):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    # 数据根目录参数（核心修改：指定根目录，按相对路径匹配）
+    # 数据目录参数
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/DID_light/Input")  # Input根目录
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/DID_light/GT")  # GT根目录
     parser.add_argument('--image_size', type=int, default=256)
@@ -229,7 +229,7 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--grad_clip_norm', type=float, default=0.1)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数
