@@ -116,6 +116,10 @@ def train(config):
             enhanced, L_list, R_list = retinex_net(input_img)
             # output_img = retinex_net(input_img)  # 模型输出增强图
 
+            # 在前向传播后添加
+            print("enhanced size:", enhanced.size())  # 输出: [batch_size, 3, H, W]
+            print("gt_img size:", gt_img.size())  # 预期: [batch_size, 3, 128, 128]
+
             # 计算损失（增强图 vs GT图）
             # loss = criterion(output_img, gt_img)
             loss = multi_scale_loss(L_list, R_list, gt_img)
@@ -218,14 +222,14 @@ if __name__ == "__main__":
     # 数据根目录参数（核心修改：指定根目录，按相对路径匹配）
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/DID_light/Input")  # Input根目录
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/DID_light/GT")  # GT根目录
-    parser.add_argument('--image_size', type=int, default=128)
+    parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
     parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--grad_clip_norm', type=float, default=0.1)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=8)
+    parser.add_argument('--train_batch_size', type=int, default=4)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数
