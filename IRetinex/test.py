@@ -13,8 +13,27 @@ from torchvision import transforms
 from PIL import Image
 import glob
 import lpips
+import warnings
 from skimage.metrics import structural_similarity as ssim
 import math
+import traceback
+
+
+# -------------------------- 工具函数（新增） --------------------------
+def resize_tensor_to_match(src_tensor, target_tensor):
+    """
+    将源张量resize到目标张量的尺寸（保持C维度，调整H/W）
+    :param src_tensor: 待调整张量 [C, H, W]
+    :param target_tensor: 目标尺寸张量 [C, H, W]
+    :return: 尺寸对齐后的源张量 [C, H_target, W_target]
+    """
+    # 获取目标尺寸
+    target_h, target_w = target_tensor.shape[1], target_tensor.shape[2]
+    # 构建resize变换（只调整H/W，保持C）
+    resize_transform = transforms.Resize((target_h, target_w), antialias=True)
+    # 增加batch维度 -> resize -> 去除batch维度
+    resized_tensor = resize_transform(src_tensor.unsqueeze(0)).squeeze(0)
+    return resized_tensor
 
 
 # -------------------------- 指标计算函数 --------------------------
@@ -25,6 +44,11 @@ def calculate_psnr(img1, img2):
     :param img2: GT图像 [C, H, W]，值域0-1
     :return: PSNR值
     """
+    # 前置检查：确保尺寸一致
+    if img1.shape != img2.shape:
+        print(f"警告：图像尺寸不匹配 {img1.shape} vs {img2.shape}，自动对齐尺寸")
+        img1 = resize_tensor_to_match(img1, img2)
+
     img1 = img1.float()
     img2 = img2.float()
     mse = torch.mean((img1 - img2) ** 2)
@@ -40,10 +64,15 @@ def calculate_ssim(img1, img2):
     :param img2: GT图像 [C, H, W]，值域0-1
     :return: SSIM值
     """
+    # 前置检查：确保尺寸一致
+    if img1.shape != img2.shape:
+        print(f"警告：图像尺寸不匹配 {img1.shape} vs {img2.shape}，自动对齐尺寸")
+        img1 = resize_tensor_to_match(img1, img2)
+
     img1_np = img1.permute(1, 2, 0).cpu().numpy()
     img2_np = img2.permute(1, 2, 0).cpu().numpy()
-    # 多通道SSIM计算，data_range=1.0（值域0-1）
-    ssim_val = ssim(img1_np, img2_np, multichannel=True, data_range=1.0)
+    # 修复：multichannel参数已废弃，改用channel_axis=-1（适配新版skimage）
+    ssim_val = ssim(img1_np, img2_np, channel_axis=-1, data_range=1.0)
     return ssim_val
 
 
@@ -67,6 +96,11 @@ def calculate_mabd(enhanced_img, gt_img):
     :param gt_img: GT图像 [C, H, W]，值域0-1
     :return: MABD值
     """
+    # 前置检查：确保尺寸一致（避免亮度计算偏差）
+    if enhanced_img.shape != gt_img.shape:
+        print(f"警告：图像尺寸不匹配 {enhanced_img.shape} vs {gt_img.shape}，自动对齐尺寸")
+        enhanced_img = resize_tensor_to_match(enhanced_img, gt_img)
+
     enhanced_alv = calculate_alv(enhanced_img)
     gt_alv = calculate_alv(gt_img)
     mabd = torch.abs(enhanced_alv - gt_alv)
@@ -95,9 +129,20 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     gt_img_np = (np.asarray(gt_img_pil) / 255.0).astype(np.float32)
     gt_img = torch.from_numpy(gt_img_np).float()
 
+    # 修复：增加尺寸检查，避免裁剪出错（解包错误的核心诱因之一）
+    if len(data_lowlight.shape) != 3 or len(gt_img.shape) != 3:
+        raise ValueError(
+            f"图像维度错误 - 测试图shape: {data_lowlight.shape}, GT图shape: {gt_img.shape} (期望3维[H,W,C])")
+
     # 3. 裁剪到scale_factor的整数倍（保证模型输入尺寸合法）
-    h = (data_lowlight.shape[0] // scale_factor) * scale_factor
-    w = (data_lowlight.shape[1] // scale_factor) * scale_factor
+    # 优化：同时对齐测试图和GT图的裁剪尺寸，避免初始尺寸不一致
+    h = min(data_lowlight.shape[0], gt_img.shape[0]) // scale_factor * scale_factor
+    w = min(data_lowlight.shape[1], gt_img.shape[1]) // scale_factor * scale_factor
+    # 增加边界检查，避免裁剪尺寸为0
+    if h <= 0 or w <= 0:
+        raise ValueError(
+            f"裁剪后尺寸非法 - h: {h}, w: {w} (scale_factor={scale_factor}, 测试图尺寸={data_lowlight.shape[:2]}, GT图尺寸={gt_img.shape[:2]})")
+
     data_lowlight = data_lowlight[0:h, 0:w, :]
     gt_img = gt_img[0:h, 0:w, :]  # GT图像同步裁剪
 
@@ -121,11 +166,20 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
 
     start = time.time()
     with torch.no_grad():
-        enhanced_image, _ = IRetinex_net(data_lowlight.unsqueeze(0))  # [1, C, H, W]
+        # 修复：检查模型输出是否为2个元素（避免解包错误）
+        model_output = IRetinex_net(data_lowlight.unsqueeze(0))  # [1, C, H, W]
+        if isinstance(model_output, (tuple, list)) and len(model_output) >= 1:
+            enhanced_image = model_output[0]  # 取第一个输出作为增强图
+        else:
+            enhanced_image = model_output  # 兼容单输出模型
     infer_time = time.time() - start
 
-    # 6. 后处理：去除batch维度，裁剪到GT尺寸（防止模型输出尺寸偏移）
+    # 6. 后处理：去除batch维度 + 强制对齐GT尺寸 + 限制值域
     enhanced_image = enhanced_image.squeeze(0)  # [C, H, W]
+    # 核心修复：强制将增强图像resize到GT图像的尺寸
+    if enhanced_image.shape != gt_img.shape:
+        print(f"模型输出尺寸 {enhanced_image.shape} 与GT尺寸 {gt_img.shape} 不一致，自动对齐")
+        enhanced_image = resize_tensor_to_match(enhanced_image, gt_img)
     enhanced_image = torch.clamp(enhanced_image, 0, 1)  # 限制值域0-1
 
     # 7. 保存增强图像
@@ -138,17 +192,6 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
 # -------------------------- 主函数 --------------------------
 def main():
     # 1. 解析命令行参数
-    # parser = argparse.ArgumentParser(description='Zero-DCE++ Test with Metrics')
-    # parser.add_argument('--test_root', type=str, required=True, help='测试图片根路径')
-    # parser.add_argument('--gt_root', type=str, required=True, help='GT图片根路径')
-    # parser.add_argument('--save_root', type=str, required=True, help='增强结果保存根路径')
-    # parser.add_argument('--model_path', type=str, default='snapshots_Zero_DCE++/Epoch99.pth', help='模型权重路径')
-    # parser.add_argument('--scale_factor', type=int, default=12, help='图像裁剪缩放因子')
-    # parser.add_argument('--gpu_id', type=str, default='0', help='GPU ID（如0或0,1）')
-    # args = parser.parse_args()
-
-    # 配置：直接在此修改变量，替代命令行参数
-    # 修改路径请保持使用反斜杠或原始字符串（Windows）如 `r"C:\data\test"`
     args = SimpleNamespace(
         test_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/low',
         gt_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/high',
@@ -164,7 +207,10 @@ def main():
     cudnn.benchmark = True if torch.cuda.is_available() else False
 
     # 3. 初始化LPIPS模型（感知相似度计算）
-    lpips_model = lpips.LPIPS(net='alex').to(device)  # 使用AlexNet作为backbone
+    # 修复：适配旧版LPIPS，使用pretrained参数 + 抑制警告
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)  # 抑制pretrained弃用警告
+        lpips_model = lpips.LPIPS(net='alex', pretrained=True, spatial=False).to(device)  # 恢复pretrained参数
 
     # 4. 初始化指标累加器
     sum_psnr = 0.0
@@ -177,8 +223,13 @@ def main():
     img_count = 0
 
     # 5. 遍历所有测试图片
-    test_file_list = glob.glob(os.path.join(args.test_root, '**/*.*'), recursive=True)
-    test_file_list = [f for f in test_file_list if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+    # 修复：优化glob遍历，避免匹配到非图片文件，增加路径过滤
+    test_file_list = glob.glob(os.path.join(args.test_root, '**', '*'), recursive=True)
+    test_file_list = [
+        f for f in test_file_list
+        if os.path.isfile(f) and f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))
+    ]
+    print(f"找到 {len(test_file_list)} 张测试图片")
 
     for test_img_path in test_file_list:
         # 匹配GT图片路径（假设文件名相同，路径不同）
@@ -200,6 +251,8 @@ def main():
             )
         except Exception as e:
             print(f"处理图片 {test_img_path} 时出错：{e}，跳过该图片")
+            # 新增：打印详细错误堆栈，精准定位错误行
+            traceback.print_exc()
             continue
 
         # 计算指标
