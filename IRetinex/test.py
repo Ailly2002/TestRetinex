@@ -110,14 +110,14 @@ def calculate_mabd(enhanced_img, gt_img):
 # -------------------------- 核心增强函数 --------------------------
 def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     """
-    低光照图像增强，返回增强图像、推理时间
+    低光照图像增强，返回增强图像、推理时间及中间/最终的 L/R
     :param image_path: 测试图像路径
     :param gt_path: GT图像路径
     :param scale_factor: 缩放因子（用于裁剪）
     :param model_path: 模型权重路径
     :param save_path: 增强图像保存路径
     :param device: 计算设备（cuda/cpu）
-    :return: enhanced_img [C, H, W]、gt_img [C, H, W]、推理时间
+    :return: enhanced_img [C, H, W]、gt_img [C, H, W]、推理时间、L_init、R_init、L_final、R_final
     """
     # 1. 读取并预处理测试图像
     data_lowlight = Image.open(image_path).convert('RGB')
@@ -152,41 +152,71 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
 
     # 5. 加载模型并推理
     IRetinex_net = models.IRetinex().to(device)
-    # 加载权重文件（包含model_state、epoch等）
     checkpoint = torch.load(model_path, map_location=device)
-    # 提取真正的模型state_dict（从model_state键中）
     if 'model_state' in checkpoint:
         model_weights = checkpoint['model_state']
     else:
-        model_weights = checkpoint  # 兼容直接保存state_dict的情况
-    # 加载权重，设置strict=False忽略少量不匹配（如果模型结构略有差异）
+        model_weights = checkpoint
     IRetinex_net.load_state_dict(model_weights, strict=False)
-    # 设置模型为评估模式
     IRetinex_net.eval()
 
     start = time.time()
     with torch.no_grad():
-        # 修复：检查模型输出是否为2个元素（避免解包错误）
-        model_output = IRetinex_net(data_lowlight.unsqueeze(0))  # [1, C, H, W]
-        if isinstance(model_output, (tuple, list)) and len(model_output) >= 1:
-            enhanced_image = model_output[0]  # 取第一个输出作为增强图
+        model_output = IRetinex_net(data_lowlight.unsqueeze(0))  # 以 batch=1 输入
+        # 兼容多种返回形式：优先解析 enhanced, L_init, R_init, L_final, R_final
+        if isinstance(model_output, (tuple, list)):
+            enhanced_image = model_output[0]
+            L_init = model_output[1] if len(model_output) > 1 else None
+            R_init = model_output[2] if len(model_output) > 2 else None
+            L_final = model_output[3] if len(model_output) > 3 else None
+            R_final = model_output[4] if len(model_output) > 4 else None
         else:
-            enhanced_image = model_output  # 兼容单输出模型
+            # 兼容单输出模型（旧行为）
+            enhanced_image = model_output
+            L_init = R_init = L_final = R_final = None
     infer_time = time.time() - start
 
     # 6. 后处理：去除batch维度 + 强制对齐GT尺寸 + 限制值域
     enhanced_image = enhanced_image.squeeze(0)  # [C, H, W]
-    # 核心修复：强制将增强图像resize到GT图像的尺寸
     if enhanced_image.shape != gt_img.shape:
         print(f"模型输出尺寸 {enhanced_image.shape} 与GT尺寸 {gt_img.shape} 不一致，自动对齐")
         enhanced_image = resize_tensor_to_match(enhanced_image, gt_img)
     enhanced_image = torch.clamp(enhanced_image, 0, 1)  # 限制值域0-1
 
-    # 7. 保存增强图像
+    # 7. 保存增强图像（原位置）
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torchvision.utils.save_image(enhanced_image, save_path)
+    torchvision.utils.save_image(enhanced_image.cpu(), save_path)
 
-    return enhanced_image, gt_img, infer_time
+    # 8. 保存中间与最终的 L/R 到指定子文件夹（mid / enhanced）
+    base_dir = os.path.dirname(save_path)  # 在同一级目录下创建子目录
+    mid_dir = os.path.join(base_dir, 'mid')
+    enh_dir = os.path.join(base_dir, 'enhanced')
+    os.makedirs(mid_dir, exist_ok=True)
+    os.makedirs(enh_dir, exist_ok=True)
+
+    img_name = os.path.basename(save_path)
+    name_wo_ext = os.path.splitext(img_name)[0]
+
+    # 定义一个保存函数：先对齐到GT尺寸再保存
+    def _save_tensor(tensor, target_path):
+        if tensor is None:
+            return
+        t = tensor.squeeze(0) if tensor.dim() == 4 else tensor  # 去除batch
+        # 若尺寸与GT不一致则对齐
+        if t.shape != gt_img.shape:
+            t = resize_tensor_to_match(t, gt_img)
+        t = torch.clamp(t, 0, 1)
+        torchvision.utils.save_image(t.cpu(), target_path)
+
+    # 保存 L_init / R_init -> mid
+    _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"))
+    _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"))
+
+    # 保存 L_final / R_final -> enhanced 子目录（与最终增强图区分）
+    _save_tensor(L_final, os.path.join(enh_dir, f"{name_wo_ext}_L_final.png"))
+    _save_tensor(R_final, os.path.join(enh_dir, f"{name_wo_ext}_R_final.png"))
+
+    return enhanced_image, gt_img, infer_time, L_init, R_init, L_final, R_final
 
 
 # -------------------------- 主函数 --------------------------
@@ -245,13 +275,12 @@ def main():
 
         # 低光照增强
         try:
-            enhanced_img, gt_img, infer_time = lowlight(
+            enhanced_img, gt_img, infer_time, L_init, R_init, L_final, R_final = lowlight(
                 test_img_path, gt_img_path, args.scale_factor,
                 args.model_path, save_img_path, device
             )
         except Exception as e:
             print(f"处理图片 {test_img_path} 时出错：{e}，跳过该图片")
-            # 新增：打印详细错误堆栈，精准定位错误行
             traceback.print_exc()
             continue
 

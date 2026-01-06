@@ -203,6 +203,9 @@ class IRetinex(nn.Module):
         enhanced_half = L_final * R_final
         enhanced = self.final_upsample(enhanced_half)  # 128×128 → 256×256
 
+        # 返回：保持 enhanced 为第一个返回项（兼容原调用），并同时返回 L_init/R_init/L_final/R_final
+        return enhanced, L_init, R_init, L_final, R_final, L_list, R_list
+
         # 调试：打印关键尺寸
         # print(f"输入图像尺寸: {x.shape}")
         # print(f"1/2尺寸增强图: {enhanced_half.shape}")
