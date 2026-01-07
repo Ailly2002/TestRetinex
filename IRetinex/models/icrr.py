@@ -26,7 +26,7 @@ class DualColorSpacePrior(nn.Module):
         # 1. 计算RGB空间照明先验 (公式(10))
         Lrgb = (x[:, 0:1] + x[:, 1:2] + x[:, 2:3]) / 3  # 1通道
 
-        # 2. 直接计算V通道 (亮度) 作为LHSV
+        # 2. 直接计算V通道 (明度) 作为LHSV
         Lhsv = torch.max(x, dim=1, keepdim=True)[0]  # [B, 1, H, W], 1通道
 
         # 3. 拼接输入特征、RGB照明先验和V通道,应用卷积得到最终照明估计

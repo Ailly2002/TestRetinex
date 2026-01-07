@@ -25,7 +25,40 @@ class MRES(nn.Module):
 
         # Apply attention: [B, C, HW] @ [B, C, HW] -> [B, C, HW]
         residual = torch.matmul(similarity, V_flat)
-        return residual.view(B, C, H, W)
+
+        # 把下面的代码替换到 `IRetinex/models/main_model.py` 出现 `return residual.view(B, C, H, W)` 的 forward 中
+        # 假定该 forward 的输入有 Q, K, V 三个张量（或至少含有 V），并且 residual 为前面计算得到的张量。
+
+        # --- 开始替换片段 ---
+        # residual: 之前计算得到的张量，可能是 [B, N] 或其他展平形式
+        # V: 传入的 value 特征张量，包含正确的空间尺寸
+
+        B = residual.size(0)
+
+        # 从 V 获取目标空间尺寸（更可靠）
+        H = V.size(2)
+        W = V.size(3)
+
+        # 计算每个 batch 的元素数（按展平张量）
+        num_per_batch = residual.numel() // B
+
+        # 检查能否整除 H*W
+        if (H * W) == 0:
+            raise RuntimeError(f"目标空间尺寸非法 H*W == 0 (H={H}, W={W})")
+
+        if num_per_batch % (H * W) != 0:
+            # 抛出更易理解的错误并包含诊断信息
+            raise RuntimeError(
+                f"无法 reshape residual: 每批元素数 {num_per_batch} 不能被 H*W={H * W} 整除. "
+                f"residual.shape={tuple(residual.shape)}, V.shape={tuple(V.shape)}"
+            )
+
+        C = num_per_batch // (H * W)
+
+        # 最终 reshape（使用 view 或 reshape 都可）
+        residual = residual.view(B, C, H, W)
+
+        return residual
 
 
 class SES(nn.Module):

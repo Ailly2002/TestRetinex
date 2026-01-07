@@ -208,9 +208,29 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
         t = torch.clamp(t, 0, 1)
         torchvision.utils.save_image(t.cpu(), target_path)
 
+    if L_init is not None and R_init is not None:
+        # 将L_init和R_init展平为向量
+        L_init_flat = L_init.view(-1)
+        R_init_flat = R_init.view(-1)
+
+        # 计算余弦相似度
+        dot_product = torch.dot(L_init_flat, R_init_flat)
+        norm_L_init = torch.norm(L_init_flat)
+        norm_R_init = torch.norm(R_init_flat)
+
+        # 避免除以0的情况
+        if norm_L_init == 0 or norm_R_init == 0:
+            cosine_sim = 0.0
+        else:
+            cosine_sim = dot_product / (norm_L_init * norm_R_init)
+
+        # 打印余弦相似度
+        print(f"init CS: {cosine_sim:.4f}")
+
     # 保存 L_init / R_init -> mid
     _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"))
     _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"))
+    _save_tensor(R_init*L_init, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"))
 
     # 保存 L_final / R_final -> enhanced 子目录（与最终增强图区分）
     _save_tensor(L_final, os.path.join(enh_dir, f"{name_wo_ext}_L_final.png"))

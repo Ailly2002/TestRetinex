@@ -231,11 +231,11 @@ if __name__ == "__main__":
     parser.add_argument('--image_size', type=int, default=512)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--weight_decay', type=float, default=1e-5)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--grad_clip_norm', type=float, default=1.0)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=0)  # Windows下设为0避免多进程报错
 
     # 日志与快照参数
