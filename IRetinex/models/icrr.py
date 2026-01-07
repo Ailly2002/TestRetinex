@@ -11,9 +11,11 @@ class DualColorSpacePrior(nn.Module):
         super(DualColorSpacePrior, self).__init__()
         # 5通道输入 -> 3通道输出
         self.conv = nn.Sequential(
-            nn.Conv2d(5, 3, 1, 1, 0),  # 1x1卷积
-            nn.Conv2d(3, 3, 5, 1, 2),  # 5x5卷积
-            nn.Conv2d(3, 3, 1, 1, 0)   # 1x1卷积
+            nn.Conv2d(5, 32, 1, 1, 0),  # 1x1卷积
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 3, 1, 1, 0)   # 1x1卷积
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -41,9 +43,11 @@ class ReflectanceDecomposition(nn.Module):
         super(ReflectanceDecomposition, self).__init__()
         # 6通道输入(3通道I_l+3通道R_init) -> 3通道输出
         self.conv = nn.Sequential(
-            nn.Conv2d(6, 3, 1, 1, 0),  # 1x1卷积
-            nn.Conv2d(3, 3, 5, 1, 2),  # 5x5卷积
-            nn.Conv2d(3, 3, 1, 1, 0)   # 1x1卷积
+            nn.Conv2d(6, 32, 1, 1, 0),  # 1x1卷积
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 3, 1, 1, 0)   # 1x1卷积
         )
 
     def forward(self, I_l: torch.Tensor, L: torch.Tensor) -> torch.Tensor:

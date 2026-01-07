@@ -31,16 +31,26 @@ class MRES(nn.Module):
 class SES(nn.Module):
     """超分辨率增强方案 (SES) - 论文3.4节"""
 
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, scale_factor: int = 2):
         super(SES, self).__init__()
-        self.enhance = nn.Sequential(
-            nn.Conv2d(channels, channels, 3, 1, 1),
+        self.up = nn.Sequential(
+            # 使用转置卷积直接上采样 s(scale factor) 倍
+            nn.ConvTranspose2d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=scale_factor,
+                stride=scale_factor,
+                padding=0,
+                output_padding=0,
+                bias=False
+            ),
             nn.ReLU(),
-            nn.Conv2d(channels, channels, 3, 1, 1)
+            # 后续卷积用于特征精炼
+            nn.Conv2d(channels, channels, kernel_size=3, stride=1, padding=1)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.enhance(x)
+        return self.up(x)  # 输出: (B, C, s*H, s*W)
 
 class FFN(nn.Module):
     """下采样版前馈网络 (FFN) - 用于前5个RCM，尺度减半"""
@@ -203,9 +213,6 @@ class IRetinex(nn.Module):
         enhanced_half = L_final * R_final
         enhanced = self.final_upsample(enhanced_half)  # 128×128 → 256×256
 
-        # 返回：保持 enhanced 为第一个返回项（兼容原调用），并同时返回 L_init/R_init/L_final/R_final
-        return enhanced, L_init, R_init, L_final, R_final, L_list, R_list
-
         # 调试：打印关键尺寸
         # print(f"输入图像尺寸: {x.shape}")
         # print(f"1/2尺寸增强图: {enhanced_half.shape}")
@@ -214,4 +221,5 @@ class IRetinex(nn.Module):
         # for i, feat in enumerate(L_list):
         #     print(f"第{i + 5}个RCM - L特征尺寸: {feat.shape}")
 
-        return enhanced, L_list, R_list
+        # 返回：保持 enhanced 为第一个返回项（兼容原调用），并同时返回 L_init/R_init/L_final/R_final
+        return enhanced, L_init, R_init, L_final, R_final, L_list, R_list

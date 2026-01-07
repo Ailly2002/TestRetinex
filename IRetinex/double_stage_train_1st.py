@@ -9,6 +9,7 @@ import numpy as np
 
 # 导入核心模块（与你的train.py保持一致）
 from models.main_model import IRetinex
+from models.ZeroDCEloss import L_color as LColorClass, L_spa as LSpaClass, L_exp as LExpClass, L_TV as LTVClass
 from data_loader import RetinexDataset  # 你的数据加载类
 
 def main():
@@ -62,13 +63,20 @@ def main():
     for param in model.reflectance_decomp.parameters():
         param.requires_grad = True
 
+    # 初始化 ZeroDCE 风格的损失（注意 L_spa 构造里使用了 .cuda()，需在 CUDA 可用时运行）
+    try:
+        L_color = LColorClass().to(device)
+        L_spa = LSpaClass().to(device)
+        L_exp = LExpClass(16).to(device)
+        L_TV = LTVClass().to(device)
+    except Exception as e:
+        raise RuntimeError("初始化 ZeroDCEloss 时出错（可能需要 CUDA 可用）。错误: " + str(e))
+
     optimizer = optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=lr,
         weight_decay=weight_decay
     )
-
-    criterion = nn.MSELoss().to(device)
 
     # 训练循环
     model.train()
@@ -83,7 +91,13 @@ def main():
             L_init = model.dual_color(low_light_imgs)
             R_init = model.reflectance_decomp(low_light_imgs, L_init)
 
-            loss = criterion(R_init, gt_imgs)
+            # 计算各项损失（按示例权重）
+            Loss_TV = 1600.0 * L_TV(L_init)
+            loss_spa = torch.mean(L_spa(R_init, low_light_imgs))
+            loss_col = 5.0 * torch.mean(L_color(R_init))
+            loss_exp = 10.0 * torch.mean(L_exp(R_init, 0.6))
+
+            loss = Loss_TV + loss_spa + loss_col + loss_exp
 
             optimizer.zero_grad()
             loss.backward()
