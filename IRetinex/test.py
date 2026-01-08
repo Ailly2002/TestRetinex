@@ -15,6 +15,7 @@ import glob
 import lpips
 import warnings
 from skimage.metrics import structural_similarity as ssim
+import torch.nn.functional as F
 import math
 import traceback
 
@@ -22,18 +23,24 @@ import traceback
 # -------------------------- 工具函数（新增） --------------------------
 def resize_tensor_to_match(src_tensor, target_tensor):
     """
-    将源张量resize到目标张量的尺寸（保持C维度，调整H/W）
-    :param src_tensor: 待调整张量 [C, H, W]
-    :param target_tensor: 目标尺寸张量 [C, H, W]
-    :return: 尺寸对齐后的源张量 [C, H_target, W_target]
+    将 src_tensor 调整到 target_tensor 的 H/W（保持 C）。
+    支持输入为 [C,H,W], [H,W,C], [1,C,H,W] 等常见格式。
+    返回 [C, H_target, W_target] 的 tensor（与 target_tensor 在同一设备）。
     """
-    # 获取目标尺寸
+    t = src_tensor
+    # 去除 batch 维
+    if t.dim() == 4 and t.shape[0] == 1:
+        t = t.squeeze(0)
+    # 如果是 HWC -> CHW
+    if t.dim() == 3 and t.shape[2] in (1, 3) and t.shape[0] not in (1, 3):
+        t = t.permute(2, 0, 1)
+    if t.dim() != 3:
+        raise ValueError(f"无法识别的张量维度用于 resize: {src_tensor.shape}")
     target_h, target_w = target_tensor.shape[1], target_tensor.shape[2]
-    # 构建resize变换（只调整H/W，保持C）
-    resize_transform = transforms.Resize((target_h, target_w), antialias=True)
-    # 增加batch维度 -> resize -> 去除batch维度
-    resized_tensor = resize_transform(src_tensor.unsqueeze(0)).squeeze(0)
-    return resized_tensor
+    t = t.unsqueeze(0)  # [1,C,H,W]
+    # 使用双线性插值（保持 float）
+    t_resized = F.interpolate(t, size=(target_h, target_w), mode='bilinear', align_corners=False)
+    return t_resized.squeeze(0)
 
 
 # -------------------------- 指标计算函数 --------------------------
@@ -44,17 +51,15 @@ def calculate_psnr(img1, img2):
     :param img2: GT图像 [C, H, W]，值域0-1
     :return: PSNR值
     """
-    # 前置检查：确保尺寸一致
     if img1.shape != img2.shape:
         print(f"警告：图像尺寸不匹配 {img1.shape} vs {img2.shape}，自动对齐尺寸")
         img1 = resize_tensor_to_match(img1, img2)
-
     img1 = img1.float()
     img2 = img2.float()
-    mse = torch.mean((img1 - img2) ** 2)
+    mse = torch.mean((img1 - img2) ** 2).item()
     if mse == 0:
         return float('inf')
-    return 10 * torch.log10(1 / mse)
+    return 10.0 * math.log10(1.0 / mse)
 
 
 def calculate_ssim(img1, img2):
@@ -197,40 +202,40 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     img_name = os.path.basename(save_path)
     name_wo_ext = os.path.splitext(img_name)[0]
 
-    # 定义一个保存函数：先对齐到GT尺寸再保存
-    def _save_tensor(tensor, target_path):
+    # 定义一个保存函数：先对齐到GT尺寸再保存，并将值映射到0-255
+    def _save_tensor(tensor, target_path, gt_img=None):
         if tensor is None:
             return
-        t = tensor.squeeze(0) if tensor.dim() == 4 else tensor  # 去除batch
-        # 若尺寸与GT不一致则对齐
-        if t.shape != gt_img.shape:
+        t = tensor
+        # 去除可能的 batch 维
+        if t.dim() == 4 and t.shape[0] == 1:
+            t = t.squeeze(0)
+        # 若为 HWC（最后一维为通道），调整为 CHW
+        if t.dim() == 3 and t.shape[-1] in (1, 3) and t.shape[0] not in (1, 3):
+            t = t.permute(2, 0, 1)
+        # 使用传入的 gt_img 参数进行对齐（若提供）
+        if gt_img is not None and t.shape != gt_img.shape:
             t = resize_tensor_to_match(t, gt_img)
-        t = torch.clamp(t, 0, 1)
-        torchvision.utils.save_image(t.cpu(), target_path)
-
-    if L_init is not None and R_init is not None:
-        # 将L_init和R_init展平为向量
-        L_init_flat = L_init.view(-1)
-        R_init_flat = R_init.view(-1)
-
-        # 计算余弦相似度
-        dot_product = torch.dot(L_init_flat, R_init_flat)
-        norm_L_init = torch.norm(L_init_flat)
-        norm_R_init = torch.norm(R_init_flat)
-
-        # 避免除以0的情况
-        if norm_L_init == 0 or norm_R_init == 0:
-            cosine_sim = 0.0
-        else:
-            cosine_sim = dot_product / (norm_L_init * norm_R_init)
-
-        # 打印余弦相似度
-        print(f"init CS: {cosine_sim:.4f}")
+        t = torch.clamp(t, 0.0, 1.0).cpu()
+        torchvision.utils.save_image(t, target_path)
 
     # 保存 L_init / R_init -> mid
-    _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"))
-    _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"))
-    _save_tensor(R_init*L_init, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"))
+    _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"), gt_img=gt_img)
+    _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"), gt_img=gt_img)
+    # 仅在两者都存在时计算并保存 I_mid
+    if L_init is not None and R_init is not None:
+        try:
+            I_mid = torch.clamp(R_init * L_init, 0.0, 1.0)
+            _save_tensor(I_mid, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"), gt_img=gt_img)
+        except Exception:
+            # 若形状不匹配，可先尝试对齐再相乘
+            L_aligned = resize_tensor_to_match(L_init,
+                                               gt_img) if L_init is not None and L_init.shape != gt_img.shape else L_init
+            R_aligned = resize_tensor_to_match(R_init,
+                                               gt_img) if R_init is not None and R_init.shape != gt_img.shape else R_init
+            if L_aligned is not None and R_aligned is not None:
+                I_mid = torch.clamp(R_aligned * L_aligned, 0.0, 1.0)
+                _save_tensor(I_mid, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"), gt_img=gt_img)
 
     # 保存 L_final / R_final -> enhanced 子目录（与最终增强图区分）
     _save_tensor(L_final, os.path.join(enh_dir, f"{name_wo_ext}_L_final.png"))
@@ -245,9 +250,9 @@ def main():
     args = SimpleNamespace(
         test_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/low',
         gt_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/high',
-        save_root=r'E:/Experiences/LOL/IRetinex/RELU',
+        save_root=r'E:/Experiences/LOL/IRetinex/20260107_164941',
         # model_path=r'./snapshot/20260105_225353/Epoch_100_20260105_225353.pth',
-        model_path = r'checkpoints/phase1/phase1_epoch_30.pth',
+        model_path = r'./snapshot_phase2/20260107_164941/Phase2_Epoch_100_20260107_164941.pth',
         scale_factor=12,
         gpu_id='0'
     )
@@ -308,7 +313,9 @@ def main():
         # 计算指标
         psnr = calculate_psnr(enhanced_img, gt_img)
         ssim_val = calculate_ssim(enhanced_img, gt_img)
-        lpips_val = lpips_model(enhanced_img.unsqueeze(0), gt_img.unsqueeze(0)).item()
+        inp_enh = (enhanced_img.unsqueeze(0).to(device) * 2.0 - 1.0)
+        inp_gt = (gt_img.unsqueeze(0).to(device) * 2.0 - 1.0)
+        lpips_val = lpips_model(inp_enh, inp_gt).item()
         enhanced_alv = calculate_alv(enhanced_img).item()
         gt_alv = calculate_alv(gt_img).item()
         mabd = calculate_mabd(enhanced_img, gt_img).item()

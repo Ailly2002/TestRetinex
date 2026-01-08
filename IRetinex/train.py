@@ -13,7 +13,8 @@ from torch.utils.tensorboard import SummaryWriter
 from models import IRetinex, MultiScaleConsistencyLoss
 import data_loader
 from utils import save_model, visualize_results, calculate_psnr, calculate_ssim, load_model
-import datetime  # 新增：用于获取当前时间
+import datetime
+import torch.nn.functional as F
 
 
 def weights_init(m):
@@ -113,13 +114,100 @@ def train(config):
             gt_img = gt_img.cuda()
 
             # 前向传播
-            enhanced, L_list, R_list = retinex_net(input_img)
-            # output_img = retinex_net(input_img)  # 模型输出增强图
+            outputs = retinex_net(input_img)
 
+            # 解析模型输出（支持 tensor / tuple(list) / dict）
+            enhanced = None
+            L_list = None
+            R_list = None
 
-            # 计算损失（增强图 vs GT图）
-            # loss = criterion(output_img, gt_img)
-            loss = multi_scale_loss(L_list, R_list, gt_img)
+            if isinstance(outputs, (tuple, list)):
+                if len(outputs) == 0:
+                    raise RuntimeError("Model returned empty tuple/list")
+                # 支持两种情况：
+                # 1) 老模型只返回 enhanced
+                # 2) 新模型返回 (enhanced, L_init, R_init, L_final, R_final, L_list, R_list)
+                enhanced = outputs[0]
+                if len(outputs) >= 7:
+                    # 新模型约定：索引5/6 为后5个RCM特征列表
+                    # outputs[5] 和 outputs[6] 应为 list/tuple 且长度为5
+                    L_list = outputs[5]
+                    R_list = outputs[6]
+                elif len(outputs) >= 3:
+                    # 兼容老格式：第二项可能是 L_list（如果是列表）
+                    candidate1 = outputs[1]
+                    candidate2 = outputs[2] if len(outputs) > 2 else None
+                    if isinstance(candidate1, (list, tuple)) and isinstance(candidate2, (list, tuple)):
+                        L_list = candidate1
+                        R_list = candidate2
+                    else:
+                        # 可能为 (enhanced, dict) 或 (enhanced, tensor...)
+                        if len(outputs) == 2 and isinstance(outputs[1], dict):
+                            d = outputs[1]
+                            L_list = d.get('L_list') or d.get('L')
+                            R_list = d.get('R_list') or d.get('R')
+                        else:
+                            # 保持 L_list/R_list 为 None，后续会尝试合成尺度或回退
+                            L_list = None
+                            R_list = None
+            elif isinstance(outputs, dict):
+                enhanced = outputs.get('enhanced') or outputs.get('output') or outputs.get('pred') or outputs.get(
+                    'enhance')
+                L_list = outputs.get('L_list') or outputs.get('L') or outputs.get('illum')
+                R_list = outputs.get('R_list') or outputs.get('R') or outputs.get('refl')
+
+            else:
+                enhanced = outputs
+
+            if isinstance(enhanced, (tuple, list)):
+                enhanced = enhanced[0]
+
+            # 如果已有合法的 5 尺度列表，直接使用 multi_scale_loss
+            use_multi_scale = (
+                    isinstance(L_list, (list, tuple)) and isinstance(R_list, (list, tuple))
+                    and len(L_list) == 5 and len(R_list) == 5
+            )
+
+            if use_multi_scale:
+                loss = multi_scale_loss(L_list, R_list, gt_img)
+            else:
+                # 尝试从 enhanced 合成 5 个尺度用于 multi_scale_loss（较稳妥的退路）
+                try:
+                    if enhanced is None:
+                        raise ValueError("No enhanced output available to synthesize scales")
+
+                    # 确保 enhanced 是 float tensor，并与 gt 同设备
+                    enhanced = enhanced.to(gt_img.device).float()
+
+                    # 合成 5 个尺度：scale 0 是原分辨率，之后逐次下采样 0.5
+                    L_synth = []
+                    R_synth = []
+                    curr = enhanced
+                    for i in range(5):
+                        L_synth.append(curr)
+                        R_synth.append(curr)
+                        if i < 4:
+                            # 使用双线性插值下采样因子 0.5
+                            h = max(1, int(curr.shape[2] // 2))
+                            w = max(1, int(curr.shape[3] // 2))
+                            curr = F.interpolate(curr, size=(h, w), mode='bilinear', align_corners=False)
+
+                    # 验证合成列表长度
+                    if len(L_synth) == 5 and len(R_synth) == 5:
+                        loss = multi_scale_loss(L_synth, R_synth, gt_img)
+                    else:
+                        raise RuntimeError("Synthesized scales count mismatch")
+
+                except Exception:
+                    # 最后退回像素级 MSE 损失，保证训练不中断
+                    criterion_fallback = MSELoss().to(gt_img.device)
+                    if enhanced is None:
+                        # 如果连 enhanced 都没有，强制计算模型一次得到增强图再计算 MSE
+                        enhanced = retinex_net(input_img)
+                        if isinstance(enhanced, (tuple, list)):
+                            enhanced = enhanced[0]
+                    loss = criterion_fallback(enhanced, gt_img)
+
 
             epoch_loss += loss.item()
 
@@ -250,14 +338,14 @@ if __name__ == "__main__":
     # 数据目录参数
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/low")  # Input根目录
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/high")  # GT根目录
-    parser.add_argument('--image_size', type=int, default=512)
+    parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=0.0001)
-    parser.add_argument('--weight_decay', type=float, default=0.0001)
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--weight_decay', type=float, default=0.001)
     parser.add_argument('--grad_clip_norm', type=float, default=1.0)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=2)
+    parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数

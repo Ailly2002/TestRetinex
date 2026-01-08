@@ -228,14 +228,14 @@ if __name__ == "__main__":
     # 原有数据参数
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/low")
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/high")
-    parser.add_argument('--image_size', type=int, default=512)
+    parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--weight_decay', type=float, default=1e-4)
     parser.add_argument('--grad_clip_norm', type=float, default=1.0)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=1)
+    parser.add_argument('--train_batch_size', type=int, default=2)
     parser.add_argument('--num_workers', type=int, default=0)  # Windows下设为0避免多进程报错
 
     # 日志与快照参数
