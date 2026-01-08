@@ -86,7 +86,7 @@ class SES(nn.Module):
         return self.up(x)  # 输出: (B, C, s*H, s*W)
 
 class FFN(nn.Module):
-    """下采样版前馈网络 (FFN) - 用于前5个RCM，尺度减半"""
+    """下采样版前馈网络 (FFN) - 用于下采样 RCM（尺度减半）"""
     def __init__(self, channels: int):
         super(FFN, self).__init__()
         # FFN层当中一层stride=2的卷积实现尺度减半
@@ -101,8 +101,23 @@ class FFN(nn.Module):
         x = self.conv3(x)
         return x
 
+class FFN_Same(nn.Module):
+    """保持尺寸不变的前馈网络（用于第5个RCM）"""
+    def __init__(self, channels: int):
+        super(FFN_Same, self).__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, 1, 1)
+        self.conv2 = nn.Conv2d(channels, channels, 3, 1, 1)
+        self.conv3 = nn.Conv2d(channels, channels, 3, 1, 1)
+        self.gelu = nn.GELU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.gelu(self.conv1(x))
+        x = self.gelu(self.conv2(x))
+        x = self.conv3(x)
+        return x
+
 class FFN_Upsample(nn.Module):
-    """上采样版前馈网络 (FFN) - 用于后4个RCM，尺度加倍"""
+    """上采样版前馈网络 (FFN) - 用于上采样 RCM（尺度加倍）"""
     def __init__(self, channels: int):
         super(FFN_Upsample, self).__init__()
         # 先上采样2倍，再卷积，实现尺度加倍
@@ -120,17 +135,20 @@ class FFN_Upsample(nn.Module):
         return x
 
 class RCM(nn.Module):
-    """残差缓解与组件增强模块 (RCM) - 支持上下采样切换"""
-    def __init__(self, channels: int, is_upsample: bool = False):
+    """残差缓解与组件增强模块 (RCM) - 支持 down / same / up 三种模式"""
+    def __init__(self, channels: int, mode: str = 'down'):
         super(RCM, self).__init__()
         self.ses = SES(channels)
         self.mres_l = MRES(channels)
         self.mres_r = MRES(channels)
-        # 根据是否上采样选择FFN类型
-        if is_upsample:
+        # 根据 mode 选择不同的 FFN 实现
+        if mode == 'up':
             self.ffn_l = FFN_Upsample(channels)
             self.ffn_r = FFN_Upsample(channels)
-        else:
+        elif mode == 'same':
+            self.ffn_l = FFN_Same(channels)
+            self.ffn_r = FFN_Same(channels)
+        else:  # 'down' or default
             self.ffn_l = FFN(channels)
             self.ffn_r = FFN(channels)
 
@@ -181,7 +199,8 @@ class FeatureReconstructor(nn.Module):
         return self.reconstructor(x)
 
 class IRetinex(nn.Module):
-    """9个RCM构成U型网络（前5下采样+后4上采样）"""
+    """9个RCM构成 U 型网络，前4下采样 + 第5保持尺寸 + 后4上采样；
+       后4个 RCM 输入采用跳跃相加"""
 
     def __init__(self, feature_channels=64):
         super(IRetinex, self).__init__()
@@ -192,22 +211,14 @@ class IRetinex(nn.Module):
         self.feature_extractor_l = FeatureExtractor(3, feature_channels)
         self.feature_extractor_r = FeatureExtractor(3, feature_channels)
 
-        # RCM模块：前5个下采样，后4个上采样（共9个）
-        self.rcm_down = nn.ModuleList([RCM(feature_channels, is_upsample=False) for _ in range(5)])
-        self.rcm_up = nn.ModuleList([RCM(feature_channels, is_upsample=True) for _ in range(4)])
+        # RCM模块堆叠：前4个下采样、1个保持尺寸、后4个上采样
+        self.rcm_down = nn.ModuleList([RCM(feature_channels, mode='down') for _ in range(4)])  # RCM1-4
+        self.rcm_mid = RCM(feature_channels, mode='same')  # RCM5（保持尺寸）
+        self.rcm_up = nn.ModuleList([RCM(feature_channels, mode='up') for _ in range(4)])  # RCM6-9
 
         # 特征重建器：64通道→3通道
         self.feature_reconstructor_l = FeatureReconstructor(feature_channels, 3)
         self.feature_reconstructor_r = FeatureReconstructor(feature_channels, 3)
-
-        # 新增：最终上采样层（1/2尺寸→原始尺寸）
-        self.final_upsample = nn.Sequential(
-            nn.Conv2d(3, 3, 3, 1, 1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
-            nn.Conv2d(3, 3, 3, 1, 1),
-            nn.Sigmoid()  # 保持输出在[0,1]范围
-        )
 
     def forward(self, x: torch.Tensor) -> tuple:
         # 1. ICRR模块初始化L和R（3通道）
@@ -218,41 +229,60 @@ class IRetinex(nn.Module):
         L_feat = self.feature_extractor_l(L_init)
         R_feat = self.feature_extractor_r(R_init)
 
-        # 3. 执行9个RCM（前5下采样+后4上采样）
-        all_L_feats = []  # 存储所有9个RCM的L特征输出
-        all_R_feats = []  # 存储所有9个RCM的R特征输出
+        # 3. 执行 RCM：先 RCM1-4（下采样），再 RCM5（保持），再 RCM6-9（上采样，带跳跃相加）
+        all_L_feats = []  # 存储 RCM1..9 的 L 输出
+        all_R_feats = []
 
-        # 前5个下采样RCM
+        # RCM1-4（down）
         for rcm in self.rcm_down:
             L_feat, R_feat = rcm(L_feat, R_feat)
             all_L_feats.append(L_feat)
             all_R_feats.append(R_feat)
 
-        # 后4个上采样RCM
-        for rcm in self.rcm_up:
-            L_feat, R_feat = rcm(L_feat, R_feat)
-            all_L_feats.append(L_feat)
-            all_R_feats.append(R_feat)
+        # RCM5（same）
+        L_feat, R_feat = self.rcm_mid(L_feat, R_feat)
+        all_L_feats.append(L_feat)  # index 4 => RCM5 输出
+        all_R_feats.append(R_feat)
 
-        # 4. 提取后5个RCM输出（第5个下采样 + 后4个上采样）
+        # RCM6-9（up） — 使用题目要求的跳跃相加输入
+        # RCM6 输入 = RCM4 + RCM5
+        L_in = all_L_feats[3] + all_L_feats[4]
+        R_in = all_R_feats[3] + all_R_feats[4]
+        L_feat, R_feat = self.rcm_up[0](L_in, R_in)
+        all_L_feats.append(L_feat)  # index 5 => RCM6
+        all_R_feats.append(R_feat)
+
+        # RCM7 输入 = RCM3 + RCM6
+        L_in = all_L_feats[2] + all_L_feats[5]
+        R_in = all_R_feats[2] + all_R_feats[5]
+        L_feat, R_feat = self.rcm_up[1](L_in, R_in)
+        all_L_feats.append(L_feat)  # index 6 => RCM7
+        all_R_feats.append(R_feat)
+
+        # RCM8 输入 = RCM2 + RCM7
+        L_in = all_L_feats[1] + all_L_feats[6]
+        R_in = all_R_feats[1] + all_R_feats[6]
+        L_feat, R_feat = self.rcm_up[2](L_in, R_in)
+        all_L_feats.append(L_feat)  # index 7 => RCM8
+        all_R_feats.append(R_feat)
+
+        # RCM9 输入 = RCM1 + RCM8
+        L_in = all_L_feats[0] + all_L_feats[7]
+        R_in = all_R_feats[0] + all_R_feats[7]
+        L_feat, R_feat = self.rcm_up[3](L_in, R_in)
+        all_L_feats.append(L_feat)  # index 8 => RCM9 (最终尺度：与输入相同)
+        all_R_feats.append(R_feat)
+
+        # 4. 提取后5个RCM输出（RCM5..RCM9）
         L_list = all_L_feats[4:]  # 索引4-8（共5个）
         R_list = all_R_feats[4:]
 
-        # 5. 重建最终的L和R（从最后一个RCM输出恢复3通道）
+        # 5. 使用最后一个 RCM 的输出直接重建（不再有额外 final_upsample）
         L_final = self.feature_reconstructor_l(all_L_feats[-1])
         R_final = self.feature_reconstructor_r(all_R_feats[-1])
 
-        # 6. 初始增强图像（1/2尺寸）+ 最终上采样（恢复原始尺寸）
-        enhanced_half = L_final * R_final
-        enhanced = self.final_upsample(enhanced_half)  # 128×128 → 256×256
+        # 6. 最终增强图像（与输入相同分辨率）
+        enhanced = L_final * R_final
 
-        # 调试：打印关键尺寸
-        # print(f"输入图像尺寸: {x.shape}")
-        # print(f"1/2尺寸增强图: {enhanced_half.shape}")
-        # print(f"最终增强图尺寸: {enhanced.shape}")
-        # print("后5个RCM的L特征尺寸：")
-        # for i, feat in enumerate(L_list):
-        #     print(f"第{i + 5}个RCM - L特征尺寸: {feat.shape}")
-
-        # 返回：保持 enhanced 为第一个返回项（兼容原调用），并同时返回 L_init/R_init/L_final/R_final
+        # 返回：保持接口不变
         return enhanced, L_init, R_init, L_final, R_final, L_list, R_list

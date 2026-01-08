@@ -5,6 +5,7 @@ import numpy as np
 import argparse
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torch.nn import MSELoss
@@ -15,6 +16,79 @@ import data_loader
 from utils import save_model, visualize_results, calculate_psnr, calculate_ssim, load_model
 import datetime
 import torch.nn.functional as F
+
+
+"""
+说明：
+- 函数 plot_training_metrics 接受 epoch_metrics（list of dict）和 snapshot_dir 路径。
+- 画出 Loss / PSNR / SSIM 随 epoch 的曲线，PSNR vs SSIM 散点图，以及 PSNR 改进的直方图（基于相邻 epoch 差分）。
+- 调用示例：在训练结束后执行 plot_training_metrics(epoch_metrics, snapshot_dir)
+"""
+
+def plot_training_metrics(epoch_metrics, snapshot_dir):
+    os.makedirs(snapshot_dir, exist_ok=True)
+
+    epochs = [m['epoch'] for m in epoch_metrics]
+    losses = [m['loss'] for m in epoch_metrics]
+    psnrs = [m['psnr'] for m in epoch_metrics]
+    ssims = [m['ssim'] for m in epoch_metrics]
+
+    # Loss / PSNR / SSIM over epochs
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, losses, '-o', label='Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(snapshot_dir, 'loss_curve.png'))
+    plt.close()
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, psnrs, '-o', label='PSNR (dB)')
+    plt.plot(epochs, ssims, '-o', label='SSIM')
+    plt.xlabel('Epoch')
+    plt.ylabel('Value')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(snapshot_dir, 'psnr_ssim_curve.png'))
+    plt.close()
+
+    # PSNR vs SSIM scatter (epoch-wise averages)
+    plt.figure(figsize=(6, 6))
+    plt.scatter(psnrs, ssims, c=epochs, cmap='viridis', s=40)
+    for x, y, e in zip(psnrs, ssims, epochs):
+        if (e == epochs[0]) or (e == epochs[-1]) or (e % max(1, len(epochs)//5) == 0):
+            plt.text(x, y, str(e), fontsize=8)
+    plt.xlabel('PSNR (dB)')
+    plt.ylabel('SSIM')
+    plt.colorbar(label='Epoch')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(snapshot_dir, 'psnr_vs_ssim.png'))
+    plt.close()
+
+    # PSNR improvements histogram (epoch-to-epoch delta)
+    if len(psnrs) >= 2:
+        deltas = np.diff(psnrs)
+        plt.figure(figsize=(8, 5))
+        plt.hist(deltas, bins=20, color='C1', edgecolor='k', alpha=0.8)
+        plt.xlabel('Delta PSNR (dB) between successive epochs')
+        plt.ylabel('Count')
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(os.path.join(snapshot_dir, 'psnr_delta_hist.png'))
+        plt.close()
+
+    # 可选：保存数值到 csv 以便后续分析
+    # import csv
+    # csv_path = os.path.join(snapshot_dir, 'epoch_metrics.csv')
+    # with open(csv_path, 'w', newline='') as cf:
+    #     writer = csv.DictWriter(cf, fieldnames=['epoch', 'loss', 'psnr', 'ssim'])
+    #     writer.writeheader()
+    #     for m in epoch_metrics:
+    #         writer.writerow({'epoch': m['epoch'], 'loss': m['loss'], 'psnr': m['psnr'], 'ssim': m['ssim']})
 
 
 def weights_init(m):
@@ -224,6 +298,26 @@ def train(config):
 
             loss.backward()
 
+            if not torch.isfinite(loss):
+                # 记录信息并保存当前 batch 的输入/gt 到 snapshot 以便排查
+                err_info = f"Non-finite loss at epoch={epoch + 1}, iter={iteration + 1}, loss={loss}"
+                print(err_info)
+                bad_dir = os.path.join(snapshot_dir, "bad_batches")
+                os.makedirs(bad_dir, exist_ok=True)
+                # 保存一个小的 tensor 文件用于事后分析（注意可能包含 GPU 张量）
+                try:
+                    torch.save({
+                        'input': input_img.detach().cpu(),
+                        'gt': gt_img.detach().cpu(),
+                        'epoch': epoch + 1,
+                        'iteration': iteration + 1,
+                        'loss': float(loss.item())
+                    }, os.path.join(bad_dir, f"bad_epoch{epoch + 1}_iter{iteration + 1}.pt"))
+                except Exception as e:
+                    print("Failed to save bad batch:", e)
+                # 停止训练以便手动检查
+                raise RuntimeError(err_info)
+
             #debug设置2 打印部分梯度统计（第一个有梯度的参数）
             # grad_norms = []
             # for i, p in enumerate(retinex_net.parameters()):
@@ -331,6 +425,8 @@ def train(config):
             f"Last 10 Epochs Avg - Loss: {avg_last10_loss:.6f}, PSNR: {avg_last10_psnr:.2f} dB, SSIM: {avg_last10_ssim:.4f}")
     print("=" * 60)
 
+    plot_training_metrics(epoch_metrics, snapshot_dir)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -341,11 +437,11 @@ if __name__ == "__main__":
     parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--weight_decay', type=float, default=0.001)
+    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--grad_clip_norm', type=float, default=1.0)
     parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=8)
+    parser.add_argument('--train_batch_size', type=int, default=2)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数
@@ -356,6 +452,4 @@ if __name__ == "__main__":
     parser.add_argument('--pretrain_dir', type=str, default="snapshots_Retinex/Epoch_99.pth")
 
     config = parser.parse_args()
-
-    # 启动训练
     train(config)
