@@ -152,6 +152,10 @@ class RCM(nn.Module):
             self.ffn_l = FFN(channels)
             self.ffn_r = FFN(channels)
 
+        # 添加归一化层（使用 GroupNorm(num_groups=1) 作为 LN 的稳定替代）
+        self.norm_l = nn.GroupNorm(1, channels)
+        self.norm_r = nn.GroupNorm(1, channels)
+
     def forward(self, L: torch.Tensor, R: torch.Tensor) -> tuple:
         L_super = self.ses(L)
         R_super = self.ses(R)
@@ -169,7 +173,10 @@ class RCM(nn.Module):
         residual_R = self.mres_r(Ql, Kr, Vl)
 
         L_enhanced = self.ffn_l(residual_L + L)
+        L_enhanced = self.norm_l(L_enhanced)
+
         R_enhanced = self.ffn_r(residual_R + R)
+        R_enhanced = self.norm_r(R_enhanced)
 
         return L_enhanced, R_enhanced
 
