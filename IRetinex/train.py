@@ -16,6 +16,7 @@ import data_loader
 from utils import save_model, visualize_results, calculate_psnr, calculate_ssim, load_model
 import datetime
 import torch.nn.functional as F
+import math  # 新增：用于计算累积步数
 
 
 """
@@ -165,6 +166,12 @@ def train(config):
         weight_decay=config.weight_decay
     )
 
+    # 新增：计算梯度累积步数，使等效 batch_size >= 32
+    accumulation_steps = max(1, math.ceil(16.0 / float(config.train_batch_size)))
+    # 将累积信息写入日志
+    with open(log_file, 'a') as f:
+        f.write(f"Gradient Accumulation Steps: {accumulation_steps} (effective batch_size ~= {config.train_batch_size * accumulation_steps})\n")
+
     # 记录全程最优指标
     best_psnr = 0.0
     best_ssim = 0.0
@@ -180,6 +187,9 @@ def train(config):
         epoch_psnr = 0.0
         epoch_ssim = 0.0
         batch_count = 0
+
+        # 在 epoch 开始时清零优化器梯度，之后按 accumulation_steps 做累计
+        optimizer.zero_grad()
 
         for iteration, (input_img, gt_img) in enumerate(train_loader):
             batch_count += 1
@@ -283,71 +293,52 @@ def train(config):
                     loss = criterion_fallback(enhanced, gt_img)
 
 
-            epoch_loss += loss.item()
+            # 记录原始 loss 数值用于统计（未缩放）
+            loss_value = float(loss.item())
+            epoch_loss += loss_value
 
-            # 反向传播
-            optimizer.zero_grad()
+            # 梯度累积：缩放 loss 后 backward
+            scaled_loss = loss / accumulation_steps
 
-            #debug设置1 在执行 backward 之前，记录部分参数的值（用一个简单标量）
+            # debug：记录参数和其它信息（在 backward 前）
             param_sum_before = 0.0
             for p in retinex_net.parameters():
                 if p.requires_grad:
                     param_sum_before += p.data.float().sum().item()
-            # 计算并打印当前 loss
-            # print(f"        [DEBUG] Before backward: loss={loss.item():.6f}, lr={optimizer.param_groups[0]['lr']:.6e}")
 
-            loss.backward()
-
-            if not torch.isfinite(loss):
-                # 记录信息并保存当前 batch 的输入/gt 到 snapshot 以便排查
-                err_info = f"Non-finite loss at epoch={epoch + 1}, iter={iteration + 1}, loss={loss}"
+            # 检查 loss 是否有限
+            if not math.isfinite(loss_value):
+                err_info = f"Non-finite loss at epoch={epoch + 1}, iter={iteration + 1}, loss={loss_value}"
                 print(err_info)
                 bad_dir = os.path.join(snapshot_dir, "bad_batches")
                 os.makedirs(bad_dir, exist_ok=True)
-                # 保存一个小的 tensor 文件用于事后分析（注意可能包含 GPU 张量）
                 try:
                     torch.save({
                         'input': input_img.detach().cpu(),
                         'gt': gt_img.detach().cpu(),
                         'epoch': epoch + 1,
                         'iteration': iteration + 1,
-                        'loss': float(loss.item())
+                        'loss': float(loss_value)
                     }, os.path.join(bad_dir, f"bad_epoch{epoch + 1}_iter{iteration + 1}.pt"))
                 except Exception as e:
                     print("Failed to save bad batch:", e)
-                # 停止训练以便手动检查
                 raise RuntimeError(err_info)
 
-            #debug设置2 打印部分梯度统计（第一个有梯度的参数）
-            # grad_norms = []
-            # for i, p in enumerate(retinex_net.parameters()):
-            #     if p.grad is not None:
-            #         grad_norms.append(p.grad.detach().norm().item())
-            # # 打印梯度的最大/平均/第一个值，若全部为 0 则说明没有梯度流入
-            # if len(grad_norms) > 0:
-            #     print(
-            #         f"      [DEBUG] Gradients: max={max(grad_norms):.6e}, mean={(sum(grad_norms) / len(grad_norms)):.6e}, sample={grad_norms[0]:.6e}")
-            # else:
-            #     print("[DEBUG] No gradients found on model parameters!")
+            # 反向传播（累积）
+            scaled_loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(retinex_net.parameters(), config.grad_clip_norm)
-            optimizer.step()
+            # 何时执行一次 optimizer.step(): 当累计到 accumulation_steps 或到达最后一个 batch
+            is_last_step = ((iteration + 1) % accumulation_steps == 0) or ((iteration + 1) == len(train_loader))
+            if is_last_step:
+                # 梯度裁剪并更新参数
+                torch.nn.utils.clip_grad_norm_(retinex_net.parameters(), config.grad_clip_norm)
+                optimizer.step()
+                optimizer.zero_grad()
 
-            #debug设置3 记录参数更新后的和，比较变化量
-            # param_sum_after = 0.0
-            # for p in retinex_net.parameters():
-            #     if p.requires_grad:
-            #         param_sum_after += p.data.float().sum().item()
-            #
-            # print(
-            #     f"[DEBUG] Param sum before={param_sum_before:.6e}, after={param_sum_after:.6e}, diff={(param_sum_after - param_sum_before):.6e}")
-
-            # 计算当前batch的PSNR和SSIM
-            # 1. 将tensor转为0-255的numpy数组（RGB格式，HWC）
+            # 计算当前batch的PSNR和SSIM（不受梯度累积影响）
             output_np = enhanced.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
             gt_np = gt_img.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
 
-            # 2. 遍历batch内每张图片计算指标
             for b in range(output_np.shape[0]):
                 batch_psnr = calculate_psnr(output_np[b], gt_np[b])
                 batch_ssim = calculate_ssim(output_np[b], gt_np[b])
@@ -434,14 +425,14 @@ if __name__ == "__main__":
     # 数据目录参数
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/low")  # Input根目录
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/high")  # GT根目录
-    parser.add_argument('--image_size', type=int, default=256)
+    parser.add_argument('--image_size', type=int, default=512)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--weight_decay', type=float, default=0.001)
+    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--grad_clip_norm', type=float, default=1.0)
-    parser.add_argument('--num_epochs', type=int, default=100)
-    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--num_epochs', type=int, default=200)
+    parser.add_argument('--train_batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)
 
     # 日志与快照参数

@@ -115,14 +115,9 @@ def calculate_mabd(enhanced_img, gt_img):
 # -------------------------- 核心增强函数 --------------------------
 def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     """
-    低光照图像增强，返回增强图像、推理时间及中间/最终的 L/R
-    :param image_path: 测试图像路径
-    :param gt_path: GT图像路径
-    :param scale_factor: 缩放因子（用于裁剪）
-    :param model_path: 模型权重路径
-    :param save_path: 增强图像保存路径
-    :param device: 计算设备（cuda/cpu）
-    :return: enhanced_img [C, H, W]、gt_img [C, H, W]、推理时间、L_init、R_init、L_final、R_final
+    低光照图像增强（修正版）
+    - 对输入先裁到两图共同最小尺寸，再 pad 到 align 的倍数（reflect），
+      避免多尺度特征图尺寸不匹配导致的 runtime error。
     """
     # 1. 读取并预处理测试图像
     data_lowlight = Image.open(image_path).convert('RGB')
@@ -134,28 +129,46 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     gt_img_np = (np.asarray(gt_img_pil) / 255.0).astype(np.float32)
     gt_img = torch.from_numpy(gt_img_np).float()
 
-    # 修复：增加尺寸检查，避免裁剪出错（解包错误的核心诱因之一）
+    # 前置检查
     if len(data_lowlight.shape) != 3 or len(gt_img.shape) != 3:
         raise ValueError(
             f"图像维度错误 - 测试图shape: {data_lowlight.shape}, GT图shape: {gt_img.shape} (期望3维[H,W,C])")
 
-    # 3. 裁剪到scale_factor的整数倍（保证模型输入尺寸合法）
-    # 优化：同时对齐测试图和GT图的裁剪尺寸，避免初始尺寸不一致
-    h = min(data_lowlight.shape[0], gt_img.shape[0]) // scale_factor * scale_factor
-    w = min(data_lowlight.shape[1], gt_img.shape[1]) // scale_factor * scale_factor
-    # 增加边界检查，避免裁剪尺寸为0
-    if h <= 0 or w <= 0:
-        raise ValueError(
-            f"裁剪后尺寸非法 - h: {h}, w: {w} (scale_factor={scale_factor}, 测试图尺寸={data_lowlight.shape[:2]}, GT图尺寸={gt_img.shape[:2]})")
+    # --- 改动开始：先裁到两张图的共同最小尺寸，再 pad 到 align 的倍数 ---
+    # 取共同最小尺寸，避免直接用不同尺寸造成对齐问题
+    base_h = min(data_lowlight.shape[0], gt_img.shape[0])
+    base_w = min(data_lowlight.shape[1], gt_img.shape[1])
 
-    data_lowlight = data_lowlight[0:h, 0:w, :]
-    gt_img = gt_img[0:h, 0:w, :]  # GT图像同步裁剪
+    # 裁切到共同最小尺寸（避免后续 pad 导致 GT/测试图尺寸不一致）
+    data_lowlight = data_lowlight[0:base_h, 0:base_w, :]
+    gt_img = gt_img[0:base_h, 0:base_w, :]
 
-    # 4. 维度转换 [H, W, C] -> [C, H, W]
-    data_lowlight = data_lowlight.permute(2, 0, 1).to(device)
-    gt_img = gt_img.permute(2, 0, 1).to(device)
+    # 对齐到某个 \`align\` 倍数（选择 16 可避免多数下采样/上采样带来的奇偶差）
+    align = 16
+    target_h = int(math.ceil(base_h / align) * align)
+    target_w = int(math.ceil(base_w / align) * align)
 
-    # 5. 加载模型并推理
+    # 如果需要 pad，则在后边和右边进行反射填充（保持内容不突兀）
+    pad_h = target_h - base_h
+    pad_w = target_w - base_w
+
+    # 转为 CHW，移动到 device 之前做 pad（F.pad 支持 CHW）
+    data_lowlight = data_lowlight.permute(2, 0, 1)  # [C, H, W]
+    gt_img = gt_img.permute(2, 0, 1)  # [C, H, W]
+
+    if pad_h > 0 or pad_w > 0:
+        # F.pad pad 格式： (pad_w_left, pad_w_right, pad_h_top, pad_h_bottom)
+        # 这里只在右和下方填充
+        padding = (0, pad_w, 0, pad_h)
+        data_lowlight = F.pad(data_lowlight.unsqueeze(0), padding, mode='reflect').squeeze(0)
+        gt_img = F.pad(gt_img.unsqueeze(0), padding, mode='reflect').squeeze(0)
+
+    # 移动到设备
+    data_lowlight = data_lowlight.to(device)
+    gt_img = gt_img.to(device)
+    # --- 改动结束 ---
+
+    # 5. 载入模型并推理（其余逻辑与原实现一致）
     IRetinex_net = models.IRetinex().to(device)
     checkpoint = torch.load(model_path, map_location=device)
     if 'model_state' in checkpoint:
@@ -168,7 +181,6 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     start = time.time()
     with torch.no_grad():
         model_output = IRetinex_net(data_lowlight.unsqueeze(0))  # 以 batch=1 输入
-        # 兼容多种返回形式：优先解析 enhanced, L_init, R_init, L_final, R_final
         if isinstance(model_output, (tuple, list)):
             enhanced_image = model_output[0]
             L_init = model_output[1] if len(model_output) > 1 else None
@@ -176,7 +188,6 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
             L_final = model_output[3] if len(model_output) > 3 else None
             R_final = model_output[4] if len(model_output) > 4 else None
         else:
-            # 兼容单输出模型（旧行为）
             enhanced_image = model_output
             L_init = R_init = L_final = R_final = None
     infer_time = time.time() - start
@@ -193,7 +204,7 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     torchvision.utils.save_image(enhanced_image.cpu(), save_path)
 
     # 8. 保存中间与最终的 L/R 到指定子文件夹（mid / enhanced）
-    base_dir = os.path.dirname(save_path)  # 在同一级目录下创建子目录
+    base_dir = os.path.dirname(save_path)
     mid_dir = os.path.join(base_dir, 'mid')
     enh_dir = os.path.join(base_dir, 'enhanced')
     os.makedirs(mid_dir, exist_ok=True)
@@ -202,42 +213,32 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
     img_name = os.path.basename(save_path)
     name_wo_ext = os.path.splitext(img_name)[0]
 
-    # 定义一个保存函数：先对齐到GT尺寸再保存，并将值映射到0-255
     def _save_tensor(tensor, target_path, gt_img=None):
         if tensor is None:
             return
         t = tensor
-        # 去除可能的 batch 维
         if t.dim() == 4 and t.shape[0] == 1:
             t = t.squeeze(0)
-        # 若为 HWC（最后一维为通道），调整为 CHW
         if t.dim() == 3 and t.shape[-1] in (1, 3) and t.shape[0] not in (1, 3):
             t = t.permute(2, 0, 1)
-        # 使用传入的 gt_img 参数进行对齐（若提供）
         if gt_img is not None and t.shape != gt_img.shape:
             t = resize_tensor_to_match(t, gt_img)
         t = torch.clamp(t, 0.0, 1.0).cpu()
         torchvision.utils.save_image(t, target_path)
 
-    # 保存 L_init / R_init -> mid
     _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"), gt_img=gt_img)
     _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"), gt_img=gt_img)
-    # 仅在两者都存在时计算并保存 I_mid
     if L_init is not None and R_init is not None:
         try:
             I_mid = torch.clamp(R_init * L_init, 0.0, 1.0)
             _save_tensor(I_mid, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"), gt_img=gt_img)
         except Exception:
-            # 若形状不匹配，可先尝试对齐再相乘
-            L_aligned = resize_tensor_to_match(L_init,
-                                               gt_img) if L_init is not None and L_init.shape != gt_img.shape else L_init
-            R_aligned = resize_tensor_to_match(R_init,
-                                               gt_img) if R_init is not None and R_init.shape != gt_img.shape else R_init
+            L_aligned = resize_tensor_to_match(L_init, gt_img) if L_init is not None and L_init.shape != gt_img.shape else L_init
+            R_aligned = resize_tensor_to_match(R_init, gt_img) if R_init is not None and R_init.shape != gt_img.shape else R_init
             if L_aligned is not None and R_aligned is not None:
                 I_mid = torch.clamp(R_aligned * L_aligned, 0.0, 1.0)
                 _save_tensor(I_mid, os.path.join(mid_dir, f"{name_wo_ext}_I_mid.png"), gt_img=gt_img)
 
-    # 保存 L_final / R_final -> enhanced 子目录（与最终增强图区分）
     _save_tensor(L_final, os.path.join(enh_dir, f"{name_wo_ext}_L_final.png"))
     _save_tensor(R_final, os.path.join(enh_dir, f"{name_wo_ext}_R_final.png"))
 
@@ -250,9 +251,9 @@ def main():
     args = SimpleNamespace(
         test_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/low',
         gt_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/high',
-        save_root=r'E:/Experiences/LOL/IRetinex/20260107_164941',
+        save_root=r'E:/Experiences/LOL/IRetinex/20260108_225550-Epoch100',
         # model_path=r'./snapshot/20260105_225353/Epoch_100_20260105_225353.pth',
-        model_path = r'./snapshot_phase2/20260107_164941/Phase2_Epoch_100_20260107_164941.pth',
+        model_path = r'./snapshot/20260108_225550/Epoch_100_20260108_225550.pth',
         scale_factor=12,
         gpu_id='0'
     )
