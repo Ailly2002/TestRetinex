@@ -22,10 +22,13 @@ def main():
     lr = 1e-4
     epochs = 30
     weight_decay = 1e-5
+    # 新增：L 图监督权重与稳定项 eps
+    illum_weight = 5.0
+    illum_eps = 1e-8
     num_workers = 4 if torch.cuda.is_available() else 0
     save_dir = "checkpoints/phase1"
     os.makedirs(save_dir, exist_ok=True)
-    seed = 42
+    seed = 43
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
@@ -97,7 +100,14 @@ def main():
             loss_col = 5.0 * torch.mean(L_color(R_init))
             loss_exp = 10.0 * torch.mean(L_exp(R_init, 0.6))
 
-            loss = Loss_TV + loss_spa + loss_col + loss_exp
+            # 新增：用 Input / (GT + eps) 监督 L 图（L1）
+            # 避免除零并控制范围
+            target_L = low_light_imgs / (gt_imgs + illum_eps)
+            target_L = torch.clamp(target_L, 0.0, 1.0)
+            loss_illum = illum_weight * torch.mean(torch.abs(L_init - target_L))
+
+            # 将 illumination 监督加入总损失
+            loss = Loss_TV + loss_spa + loss_col + loss_exp + loss_illum
 
             optimizer.zero_grad()
             loss.backward()
@@ -105,7 +115,7 @@ def main():
 
             epoch_loss += loss.item()
             avg_loss = epoch_loss / (batch_idx + 1)
-            pbar.set_postfix({"loss": f"{loss.item():.6f}", "avg_loss": f"{avg_loss:.6f}"})
+            pbar.set_postfix({"loss": f"{loss.item():.6f}", "avg_loss": f"{avg_loss:.6f}", "loss_illum": f"{loss_illum.item():.6f}"})
 
         save_path = os.path.join(save_dir, f"phase1_epoch_{epoch}.pth")
         torch.save({

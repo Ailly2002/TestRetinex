@@ -93,12 +93,40 @@ def plot_training_metrics(epoch_metrics, snapshot_dir):
 
 
 def weights_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        m.weight.data.normal_(0.0, 0.02)
-    elif classname.find('BatchNorm') != -1:
-        m.weight.data.normal_(1.0, 0.02)
-        m.bias.data.fill_(0)
+    """
+    稳健的权重初始化：
+    - 仅对 nn.Conv2d / nn.ConvTranspose2d 的 weight/bias 进行正态/常数初始化（若存在）。
+    - 对常见归一化层（BatchNorm2d/GroupNorm/LayerNorm）做 scale/bias 初始化。
+    - 避免直接访问不存在的属性（如自定义模块没有 weight）。
+    """
+    # 卷积类层初始化
+    if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+        if hasattr(m, 'weight') and m.weight is not None:
+            nn.init.normal_(m.weight, 0.0, 0.02)
+        if hasattr(m, 'bias') and m.bias is not None:
+            nn.init.constant_(m.bias, 0.0)
+        return
+
+    # 归一化类层初始化
+    if isinstance(m, (nn.BatchNorm2d, nn.GroupNorm, nn.LayerNorm)):
+        if hasattr(m, 'weight') and m.weight is not None:
+            nn.init.normal_(m.weight, 1.0, 0.02)
+        if hasattr(m, 'bias') and m.bias is not None:
+            nn.init.constant_(m.bias, 0.0)
+        return
+
+    # 其它自定义层：仅在确实存在权重/偏置属性时初始化（谨慎处理）
+    if hasattr(m, 'weight') and getattr(m, 'weight') is not None:
+        try:
+            nn.init.normal_(m.weight, 0.0, 0.02)
+        except Exception:
+            pass
+    if hasattr(m, 'bias') and getattr(m, 'bias') is not None:
+        try:
+            nn.init.constant_(m.bias, 0.0)
+        except Exception:
+            pass
+
 
 
 def train(config):
