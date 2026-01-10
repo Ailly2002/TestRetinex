@@ -15,7 +15,8 @@ class DualColorSpacePrior(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 3, 1, 1, 0)   # 1x1卷积
+            nn.Conv2d(64, 3, 1, 1, 0),   # 1x1卷积
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -47,7 +48,8 @@ class ReflectanceDecomposition(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 3, 1, 1, 0)   # 1x1卷积
+            nn.Conv2d(64, 3, 1, 1, 0),  # 1x1卷积
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, I_l: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
