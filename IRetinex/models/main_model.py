@@ -3,22 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .icrr import DualColorSpacePrior, ReflectanceDecomposition
 
-# 新增：针对卷积特征的 LayerNorm 包装器（对每个空间位置，按通道做 LayerNorm）
-class ConvLayerNorm(nn.Module):
-    """
-    对 N x C x H x W 张量，在每个空间位置上对 C 维做 LayerNorm。
-    实现方式：permute -> LayerNorm(channels) -> permute 回 NCHW。
-    """
-    def __init__(self, channels: int, eps: float = 1e-5, elementwise_affine: bool = True):
-        super(ConvLayerNorm, self).__init__()
-        self.norm = nn.LayerNorm(channels, eps=eps, elementwise_affine=elementwise_affine)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: N x C x H x W -> N x H x W x C
-        x_perm = x.permute(0, 2, 3, 1)
-        x_norm = self.norm(x_perm)
-        # back to N x C x H x W
-        return x_norm.permute(0, 3, 1, 2)
 
 class MRES(nn.Module):
     """互残差估计模块 (MRES) - 论文3.4节"""
@@ -169,9 +153,9 @@ class RCM(nn.Module):
             self.ffn_l = FFN(channels)
             self.ffn_r = FFN(channels)
 
-        # 使用 LayerNorm 实现（通过 ConvLayerNorm 将 nn.LayerNorm 应用于卷积特征）
-        self.norm_l = ConvLayerNorm(channels)
-        self.norm_r = ConvLayerNorm(channels)
+        # 等价于对每个空间位置按通道做 LayerNorm
+        self.norm_l = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
+        self.norm_r = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
 
     def forward(self, L: torch.Tensor, R: torch.Tensor) -> tuple:
         L_super = self.ses(L)
@@ -202,9 +186,8 @@ class FeatureExtractor(nn.Module):
     def __init__(self, in_channels=3, out_channels=64):
         super(FeatureExtractor, self).__init__()
         self.extractor = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, 1, 1),
-            nn.ReLU(),
-            nn.Conv2d(out_channels, out_channels, 3, 1, 1)
+            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0),
+            nn.ReLU()
         )
 
     def forward(self, x):
