@@ -12,6 +12,7 @@ class MRES(nn.Module):
         self.k_layer = nn.Conv2d(channels, channels, 1)
         self.v_layer = nn.Conv2d(channels, channels, 1)
         self.di = nn.Parameter(torch.ones(1))
+        self.layernorm = nn.LayerNorm(channels)
 
     def forward(self, Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
         # Reshape for matrix multiplication: [B, C, H, W] -> [B, C, H*W]
@@ -27,7 +28,6 @@ class MRES(nn.Module):
         # Apply attention: [B, C, HW] @ [B, C, HW] -> [B, C, HW]
         residual = torch.matmul(similarity, V_flat)
 
-        # 把下面的代码替换到 `IRetinex/models/main_model.py` 出现 `return residual.view(B, C, H, W)` 的 forward 中
         # 假定该 forward 的输入有 Q, K, V 三个张量（或至少含有 V），并且 residual 为前面计算得到的张量。
 
         # --- 开始替换片段 ---
@@ -46,9 +46,7 @@ class MRES(nn.Module):
         # 检查能否整除 H*W
         if (H * W) == 0:
             raise RuntimeError(f"目标空间尺寸非法 H*W == 0 (H={H}, W={W})")
-
         if num_per_batch % (H * W) != 0:
-            # 抛出更易理解的错误并包含诊断信息
             raise RuntimeError(
                 f"无法 reshape residual: 每批元素数 {num_per_batch} 不能被 H*W={H * W} 整除. "
                 f"residual.shape={tuple(residual.shape)}, V.shape={tuple(V.shape)}"
@@ -58,6 +56,12 @@ class MRES(nn.Module):
 
         # 最终 reshape（使用 view 或 reshape 都可）
         residual = residual.view(B, C, H, W)
+
+        # 在输出前对 residual 做 LayerNorm（按每个空间位置的通道归一化）
+        # 将形状 (B, C, H, W) -> (B, H, W, C) 以便 LayerNorm(normalized_shape=channels) 在最后一个维度上生效
+        residual = residual.permute(0, 2, 3, 1)  # (B, H, W, C)
+        residual = self.layernorm(residual)
+        residual = residual.permute(0, 3, 1, 2)  # (B, C, H, W)
 
         return residual
 
