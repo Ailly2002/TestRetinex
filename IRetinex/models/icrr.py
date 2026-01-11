@@ -9,19 +9,20 @@ class DualColorSpacePrior(nn.Module):
     """双色空间先验模块 (严格遵循论文公式(9)和(10))"""
     def __init__(self):
         super(DualColorSpacePrior, self).__init__()
-        # 5通道输入 -> 3通道输出
-        self.conv = nn.Sequential(
-            nn.Conv2d(5, 32, 1, 1, 0),  # 1x1卷积
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+        mid_channels = 32
+        # 1x1 -> 5x5 depthwise -> 1x1 -> ReLU
+        self.prior_net = nn.Sequential(
+            nn.Conv2d(5, mid_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            # nn.BatchNorm2d(mid_channels),
+            # nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
+            # nn.BatchNorm2d(mid_channels),
+            # nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 3, 1, 1, 0),   # 1x1卷积
-            nn.BatchNorm2d(3),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True),
+            # nn.BatchNorm2d(3),
+            # nn.ReLU(inplace=True)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -37,7 +38,8 @@ class DualColorSpacePrior(nn.Module):
 
         # 3. 拼接输入特征、RGB照明先验和V通道,应用卷积得到最终照明估计
         concat_features = torch.cat([x, Lrgb, Lhsv], dim=1)  # 5通道
-        Linit = self.conv(concat_features)
+
+        Linit = self.prior_net(concat_features)
         return Linit
 
 # ======================
@@ -47,18 +49,20 @@ class ReflectanceDecomposition(nn.Module):
     """反射率分解模块 (严格遵循论文3.3节公式(10))"""
     def __init__(self):
         super(ReflectanceDecomposition, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(6, 32, 1, 1, 0),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+        mid_channels = 32
+        # 使用 nn.Sequential: 1x1 -> BN -> ReLU -> 5x5 depthwise -> BN -> ReLU -> 1x1 -> BN -> ReLU
+        self.reflect_net = nn.Sequential(
+            nn.Conv2d(6, mid_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            # nn.BatchNorm2d(mid_channels),
+            # nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 64, 5, 1, 2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
+            # nn.BatchNorm2d(mid_channels),
+            # nn.ReLU(inplace=True),
 
-            nn.Conv2d(64, 3, 1, 1, 0),
-            nn.BatchNorm2d(3),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True),
+            # nn.BatchNorm2d(3),
+            # nn.ReLU(inplace=True)
         )
 
     def forward(self, I_l: torch.Tensor, L: torch.Tensor) -> torch.Tensor:
@@ -78,7 +82,8 @@ class ReflectanceDecomposition(nn.Module):
         softmax_part = softmax_spatial.view(B, C, H, W)  # [B, 3, H, W]
 
         concat_features = torch.cat([I_l, softmax_part], dim=1)  # 6通道
-        Rinit = self.conv(concat_features)
+
+        Rinit = self.reflect_net(concat_features)
         return Rinit
 
 
