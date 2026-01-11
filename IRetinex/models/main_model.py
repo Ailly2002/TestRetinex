@@ -186,7 +186,7 @@ class FeatureExtractor(nn.Module):
     def __init__(self, in_channels=3, out_channels=64):
         super(FeatureExtractor, self).__init__()
         self.extractor = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
             nn.ReLU()
         )
 
