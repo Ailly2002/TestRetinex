@@ -199,9 +199,11 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
         enhanced_image = resize_tensor_to_match(enhanced_image, gt_img)
     enhanced_image = torch.clamp(enhanced_image, 0, 1)  # 限制值域0-1
 
-    # 7. 保存增强图像（原位置）
+    # 7. 保存增强图像（原位置） - 显式恢复到 [0,255] 并以 uint8 保存
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torchvision.utils.save_image(enhanced_image.cpu(), save_path)
+    # 将 tensor [C,H,W] -> HWC numpy，乘255并转uint8后用 PIL 保存，确保磁盘保存为 0-255 格式
+    enh_np = (enhanced_image.cpu().numpy().transpose(1, 2, 0) * 255.0).round().clip(0, 255).astype(np.uint8)
+    Image.fromarray(enh_np).save(save_path)
 
     # 8. 保存中间与最终的 L/R 到指定子文件夹（mid / enhanced）
     base_dir = os.path.dirname(save_path)
@@ -223,8 +225,10 @@ def lowlight(image_path, gt_path, scale_factor, model_path, save_path, device):
             t = t.permute(2, 0, 1)
         if gt_img is not None and t.shape != gt_img.shape:
             t = resize_tensor_to_match(t, gt_img)
+        # 将值域限制到 [0,1]，再恢复到 [0,255] 并保存为 uint8 图像
         t = torch.clamp(t, 0.0, 1.0).cpu()
-        torchvision.utils.save_image(t, target_path)
+        t_np = (t.numpy().transpose(1, 2, 0) * 255.0).round().clip(0, 255).astype(np.uint8)
+        Image.fromarray(t_np).save(target_path)
 
     _save_tensor(L_init, os.path.join(mid_dir, f"{name_wo_ext}_L_init.png"), gt_img=gt_img)
     _save_tensor(R_init, os.path.join(mid_dir, f"{name_wo_ext}_R_init.png"), gt_img=gt_img)
@@ -251,9 +255,9 @@ def main():
     args = SimpleNamespace(
         test_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/low',
         gt_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/high',
-        save_root=r'E:/Experiences/LOL/IRetinex/phase1-Epoch30',
+        save_root=r'E:/Experiences/LOL/IRetinex/20260110_180648_Epoch_200',
         # model_path=r'./snapshot/20260105_225353/Epoch_100_20260105_225353.pth',
-        model_path = r'./checkpoints/phase1/phase1_epoch_30.pth',
+        model_path = r'./snapshot/20260110_180648/Epoch_200_20260110_180648.pth',
         scale_factor=12,
         gpu_id='0'
     )

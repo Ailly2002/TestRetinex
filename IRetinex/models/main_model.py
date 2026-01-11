@@ -268,7 +268,7 @@ class IRetinex(nn.Module):
         all_L_feats.append(L_feat)  # index 4 => RCM5 输出
         all_R_feats.append(R_feat)
 
-        # RCM6-9（up） — 使用题目要求的跳跃相加输入
+        # RCM6-9（up） — 使用跳跃相加输入
         # RCM6 输入 = RCM4 + RCM5
         L_in = all_L_feats[3] + all_L_feats[4]
         R_in = all_R_feats[3] + all_R_feats[4]

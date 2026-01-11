@@ -12,10 +12,15 @@ class DualColorSpacePrior(nn.Module):
         # 5通道输入 -> 3通道输出
         self.conv = nn.Sequential(
             nn.Conv2d(5, 32, 1, 1, 0),  # 1x1卷积
+            nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
+
             nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
+
             nn.Conv2d(64, 3, 1, 1, 0),   # 1x1卷积
+            nn.BatchNorm2d(3),
             nn.ReLU(inplace=True)
         )
 
@@ -42,13 +47,17 @@ class ReflectanceDecomposition(nn.Module):
     """反射率分解模块 (严格遵循论文3.3节公式(10))"""
     def __init__(self):
         super(ReflectanceDecomposition, self).__init__()
-        # 6通道输入(3通道I_l+3通道R_init) -> 3通道输出
         self.conv = nn.Sequential(
-            nn.Conv2d(6, 32, 1, 1, 0),  # 1x1卷积
+            nn.Conv2d(6, 32, 1, 1, 0),
+            nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, 5, 1, 2),  # 5x5卷积
+
+            nn.Conv2d(32, 64, 5, 1, 2),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, 3, 1, 1, 0),  # 1x1卷积
+
+            nn.Conv2d(64, 3, 1, 1, 0),
+            nn.BatchNorm2d(3),
             nn.ReLU(inplace=True)
         )
 

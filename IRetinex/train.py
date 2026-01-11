@@ -18,6 +18,25 @@ import datetime
 import torch.nn.functional as F
 import math  # 新增：用于计算累积步数
 
+# 新增：防御性归一化函数，避免重复归一化
+def _ensure_tensor_0_1(t: torch.Tensor) -> torch.Tensor:
+    """
+    确保张量为 float 且值域在 [0,1]：
+      - 若不是浮点类型，先转 float。
+      - 若最大值 > 1.1，认为当前值域为 [0,255]，除以255进行归一化。
+    """
+    if not torch.is_floating_point(t):
+        t = t.float()
+    try:
+        # 计算 max 时先将数据移到 CPU（不改变原设备）
+        tmax = float(t.max().cpu().numpy())
+    except Exception:
+        # 在极少数情况下直接用 torch.max
+        tmax = float(torch.max(t))
+    if tmax > 1.1:
+        t = t / 255.0
+    return t
+
 
 """
 说明：
@@ -194,6 +213,19 @@ def train(config):
         weight_decay=config.weight_decay
     )
 
+    # --- 新增：CosineAnnealingLR 调度器（动态调整学习率） ---
+    # T_max 设为总 epoch 数，eta_min 可从 config 获取（默认 0.0）
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, int(getattr(config, 'num_epochs', 1))),
+        eta_min=getattr(config, 'eta_min', 0.0)
+    )
+
+    # 记录调度器信息到日志
+    with open(log_file, 'a') as f:
+        f.write(f"LR Scheduler: CosineAnnealingLR(T_max={config.num_epochs}, eta_min={config.eta_min})\n")
+    # --- 新增结束 ---
+
     # 新增：计算梯度累积步数，使等效 batch_size >= 32
     accumulation_steps = max(1, math.ceil(16.0 / float(config.train_batch_size)))
     # 将累积信息写入日志
@@ -221,7 +253,12 @@ def train(config):
 
         for iteration, (input_img, gt_img) in enumerate(train_loader):
             batch_count += 1
-            # 数据移至GPU
+            # 数据归一化并移至GPU（防止 dataset 返回 [0,255] 的 uint8）
+            #            # 数据移至GPU
+            #            input_img = input_img.cuda()
+            #            gt_img = gt_img.cuda()
+            input_img = _ensure_tensor_0_1(input_img)
+            gt_img = _ensure_tensor_0_1(gt_img)
             input_img = input_img.cuda()
             gt_img = gt_img.cuda()
 
@@ -364,8 +401,9 @@ def train(config):
                 optimizer.zero_grad()
 
             # 计算当前batch的PSNR和SSIM（不受梯度累积影响）
-            output_np = enhanced.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
-            gt_np = gt_img.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255
+            # 评估时按原来逻辑把 [0,1] 恢复到 [0,255] 用于指标计算/对比
+            output_np = enhanced.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255.0
+            gt_np = gt_img.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255.0
 
             for b in range(output_np.shape[0]):
                 batch_psnr = calculate_psnr(output_np[b], gt_np[b])
@@ -386,12 +424,25 @@ def train(config):
         epoch_time = time.time() - epoch_start_time
 
         # 记录当前epoch指标
+        # epoch_metrics.append({
+        #     'epoch': epoch + 1,
+        #     'loss': avg_epoch_loss,
+        #     'psnr': avg_epoch_psnr,
+        #     'ssim': avg_epoch_ssim
+        # })
+        # 记录当前学习率并保存到 epoch_metrics（便于可视化）
+        current_lr = optimizer.param_groups[0]['lr']
         epoch_metrics.append({
             'epoch': epoch + 1,
             'loss': avg_epoch_loss,
             'psnr': avg_epoch_psnr,
-            'ssim': avg_epoch_ssim
+            'ssim': avg_epoch_ssim,
+            'lr': current_lr
         })
+
+        # 将当前学习率写入训练日志
+        with open(log_file, 'a') as f:
+            f.write(f"Epoch {epoch + 1} | LR: {current_lr:.6e} | Avg Loss: {avg_epoch_loss:.6f} | PSNR: {avg_epoch_psnr:.4f} | SSIM: {avg_epoch_ssim:.4f}\n")
 
         # 更新最优指标
         if avg_epoch_psnr > best_psnr:
@@ -413,6 +464,15 @@ def train(config):
         if (epoch + 1) % config.snapshot_iter == 0:
             snapshot_path = os.path.join(snapshot_dir, f"Epoch_{epoch + 1}_{timestamp}.pth")
             save_model(retinex_net, snapshot_path, epoch + 1)
+
+        # --- 在每个 epoch 结束时更新学习率（CosineAnnealingLR） ---
+        try:
+            scheduler.step()
+        except Exception as e:
+            # 容错：若 scheduler.step() 出错，记录并继续训练
+            with open(log_file, 'a') as f:
+                f.write(f"Scheduler step failed at epoch {epoch + 1}: {e}\n")
+        # --- 结束 ---
 
     # 训练结束，更新日志文件
     with open(log_file, 'a') as f:
@@ -462,6 +522,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type=int, default=200)
     parser.add_argument('--train_batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--eta_min', type=float, default=1e-6)  # 新增：最小学习率
 
     # 日志与快照参数
     parser.add_argument('--display_iter', type=int, default=10)
