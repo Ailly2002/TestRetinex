@@ -65,7 +65,6 @@ class MRES(nn.Module):
 
         return residual
 
-
 class SES(nn.Module):
     """超分辨率增强方案 (SES) - 论文3.4节"""
 
@@ -91,53 +90,63 @@ class SES(nn.Module):
         return self.up(x)  # 输出: (B, C, s*H, s*W)
 
 class FFN(nn.Module):
-    """下采样版前馈网络 (FFN) - 用于下采样 RCM（尺度减半）"""
-    def __init__(self, channels: int):
+    """下采样版前馈网络 (FFN) - 用于下采样 RCM（尺度减半）
+       1x1 -> GELU -> depthwise 3x3 (stride=2) -> GELU -> 1x1
+    """
+    def __init__(self, channels: int, mult: int = 4):
         super(FFN, self).__init__()
-        # FFN层当中一层stride=2的卷积实现尺度减半
-        self.conv1 = nn.Conv2d(channels, channels, 3, 2, 1)
-        self.conv2 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.conv3 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.gelu = nn.GELU()
+        hidden = channels * mult
+        self.net = nn.Sequential(
+            nn.Conv2d(channels, hidden, kernel_size=1, stride=1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(hidden, hidden, kernel_size=3, stride=2, padding=1, bias=False, groups=hidden),
+            nn.GELU(),
+            nn.Conv2d(hidden, channels, kernel_size=1, stride=1, bias=False),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.gelu(self.conv1(x))
-        x = self.gelu(self.conv2(x))
-        x = self.conv3(x)
-        return x
+        # 输入/输出均为 [B, C, H, W]
+        return self.net(x)
+
 
 class FFN_Same(nn.Module):
-    """保持尺寸不变的前馈网络（用于第5个RCM）"""
-    def __init__(self, channels: int):
+    """保持尺寸不变的前馈网络（用于第5个RCM）
+       1x1 -> GELU -> depthwise 3x3 (stride=1) -> GELU -> 1x1
+    """
+    def __init__(self, channels: int, mult: int = 4):
         super(FFN_Same, self).__init__()
-        self.conv1 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.conv2 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.conv3 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.gelu = nn.GELU()
+        hidden = channels * mult
+        self.net = nn.Sequential(
+            nn.Conv2d(channels, hidden, kernel_size=1, stride=1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(hidden, hidden, kernel_size=3, stride=1, padding=1, bias=False, groups=hidden),
+            nn.GELU(),
+            nn.Conv2d(hidden, channels, kernel_size=1, stride=1, bias=False),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.gelu(self.conv1(x))
-        x = self.gelu(self.conv2(x))
-        x = self.conv3(x)
-        return x
+        return self.net(x)
+
 
 class FFN_Upsample(nn.Module):
-    """上采样版前馈网络 (FFN) - 用于上采样 RCM（尺度加倍）"""
-    def __init__(self, channels: int):
+    """上采样版前馈网络 (FFN) - 用于上采样 RCM（尺度加倍）
+       先上采样，再执行 1x1 -> GELU -> depthwise 3x3 (stride=1) -> GELU -> 1x1
+    """
+    def __init__(self, channels: int, mult: int = 4, scale_factor: int = 2):
         super(FFN_Upsample, self).__init__()
-        # 先上采样2倍，再卷积，实现尺度加倍
-        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.conv1 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.conv2 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.conv3 = nn.Conv2d(channels, channels, 3, 1, 1)
-        self.gelu = nn.GELU()
+        hidden = channels * mult
+        self.upsample = nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=False)
+        self.net = nn.Sequential(
+            nn.Conv2d(channels, hidden, kernel_size=1, stride=1, bias=False),
+            nn.GELU(),
+            nn.Conv2d(hidden, hidden, kernel_size=3, stride=1, padding=1, bias=False, groups=hidden),
+            nn.GELU(),
+            nn.Conv2d(hidden, channels, kernel_size=1, stride=1, bias=False),
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.upsample(x)  # 先上采样2倍
-        x = self.gelu(self.conv1(x))
-        x = self.gelu(self.conv2(x))
-        x = self.conv3(x)
-        return x
+        x = self.upsample(x)
+        return self.net(x)
 
 class RCM(nn.Module):
     """残差缓解与组件增强模块 (RCM) - 支持 down / same / up 三种模式"""

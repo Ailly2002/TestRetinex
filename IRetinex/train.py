@@ -513,7 +513,7 @@ if __name__ == "__main__":
     # 数据目录参数
     parser.add_argument('--input_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/low")  # Input根目录
     parser.add_argument('--gt_root', type=str, default="E:/Low-LightDatasets/Images/LOLdataset/our485/high")  # GT根目录
-    parser.add_argument('--image_size', type=int, default=512)
+    parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
     parser.add_argument('--lr', type=float, default=1e-5)
