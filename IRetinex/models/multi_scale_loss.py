@@ -47,6 +47,6 @@ class MultiScaleConsistencyLoss(nn.Module):
             loss += F.l1_loss(Ij_up, target)
 
         # 损失平均
-        loss = loss / 5
+        # loss = loss / 5
 
         return loss

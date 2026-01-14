@@ -227,7 +227,7 @@ def train(config):
     # --- 新增结束 ---
 
     # 新增：计算梯度累积步数，使等效 batch_size >= 32
-    accumulation_steps = max(1, math.ceil(16.0 / float(config.train_batch_size)))
+    accumulation_steps = max(1, math.ceil(32.0 / float(config.train_batch_size)))
     # 将累积信息写入日志
     with open(log_file, 'a') as f:
         f.write(f"Gradient Accumulation Steps: {accumulation_steps} (effective batch_size ~= {config.train_batch_size * accumulation_steps})\n")
@@ -516,13 +516,13 @@ if __name__ == "__main__":
     parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--weight_decay', type=float, default=1e-5)
-    parser.add_argument('--grad_clip_norm', type=float, default=1.0)
-    parser.add_argument('--num_epochs', type=int, default=200)
+    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--weight_decay', type=float, default=0.0001)
+    parser.add_argument('--grad_clip_norm', type=float, default=1.2)
+    parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--train_batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)
-    parser.add_argument('--eta_min', type=float, default=1e-6)  # 新增：最小学习率
+    parser.add_argument('--eta_min', type=float, default=1e-5)
 
     # 日志与快照参数
     parser.add_argument('--display_iter', type=int, default=10)

@@ -18,10 +18,11 @@ class DualColorSpacePrior(nn.Module):
 
             nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
             # nn.BatchNorm2d(mid_channels),
-            # nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True),
 
             nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True),
             # nn.BatchNorm2d(3),
+            nn.Sigmoid(),
             # nn.ReLU(inplace=True)
         )
 
@@ -58,10 +59,11 @@ class ReflectanceDecomposition(nn.Module):
 
             nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
             # nn.BatchNorm2d(mid_channels),
-            # nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True),
 
             nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True),
             # nn.BatchNorm2d(3),
+            nn.Sigmoid(),
             # nn.ReLU(inplace=True)
         )
 
