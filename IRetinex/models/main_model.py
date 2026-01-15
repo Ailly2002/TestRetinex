@@ -167,8 +167,10 @@ class RCM(nn.Module):
             self.ffn_r = FFN(channels)
 
         # 等价于对每个空间位置按通道做 LayerNorm
-        self.norm_l = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
-        self.norm_r = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
+        # self.norm_l = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
+        # self.norm_r = nn.GroupNorm(num_groups=1, num_channels=channels, eps=1e-5, affine=True)
+        self.norm_l = nn.LayerNorm(64)
+        self.norm_r = nn.LayerNorm(64)
 
     def forward(self, L: torch.Tensor, R: torch.Tensor) -> tuple:
         L_super = self.ses(L)
@@ -187,10 +189,17 @@ class RCM(nn.Module):
         residual_R = self.mres_r(Ql, Kr, Vl)
 
         L_enhanced = self.ffn_l(residual_L + L)
+        # L_enhanced = self.norm_l(L_enhanced)
+        # 将 (N,C,H,W) -> (N,H,W,C)，对最后一维通道做 LayerNorm，再换回来
+        L_enhanced = L_enhanced.permute(0, 2, 3, 1)
         L_enhanced = self.norm_l(L_enhanced)
+        L_enhanced = L_enhanced.permute(0, 3, 1, 2)
 
         R_enhanced = self.ffn_r(residual_R + R)
+        # R_enhanced = self.norm_r(R_enhanced)
+        R_enhanced = R_enhanced.permute(0, 2, 3, 1)
         R_enhanced = self.norm_r(R_enhanced)
+        R_enhanced = R_enhanced.permute(0, 3, 1, 2)
 
         return L_enhanced, R_enhanced
 

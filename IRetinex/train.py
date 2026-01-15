@@ -101,16 +101,6 @@ def plot_training_metrics(epoch_metrics, snapshot_dir):
         plt.savefig(os.path.join(snapshot_dir, 'psnr_delta_hist.png'))
         plt.close()
 
-    # 可选：保存数值到 csv 以便后续分析
-    # import csv
-    # csv_path = os.path.join(snapshot_dir, 'epoch_metrics.csv')
-    # with open(csv_path, 'w', newline='') as cf:
-    #     writer = csv.DictWriter(cf, fieldnames=['epoch', 'loss', 'psnr', 'ssim'])
-    #     writer.writeheader()
-    #     for m in epoch_metrics:
-    #         writer.writerow({'epoch': m['epoch'], 'loss': m['loss'], 'psnr': m['psnr'], 'ssim': m['ssim']})
-
-
 def weights_init(m):
     """
     稳健的权重初始化：
@@ -423,13 +413,6 @@ def train(config):
         avg_epoch_ssim = epoch_ssim / (len(train_loader) * config.train_batch_size)
         epoch_time = time.time() - epoch_start_time
 
-        # 记录当前epoch指标
-        # epoch_metrics.append({
-        #     'epoch': epoch + 1,
-        #     'loss': avg_epoch_loss,
-        #     'psnr': avg_epoch_psnr,
-        #     'ssim': avg_epoch_ssim
-        # })
         # 记录当前学习率并保存到 epoch_metrics（便于可视化）
         current_lr = optimizer.param_groups[0]['lr']
         epoch_metrics.append({
@@ -472,7 +455,6 @@ def train(config):
             # 容错：若 scheduler.step() 出错，记录并继续训练
             with open(log_file, 'a') as f:
                 f.write(f"Scheduler step failed at epoch {epoch + 1}: {e}\n")
-        # --- 结束 ---
 
     # 训练结束，更新日志文件
     with open(log_file, 'a') as f:
@@ -527,7 +509,6 @@ if __name__ == "__main__":
     # 日志与快照参数
     parser.add_argument('--display_iter', type=int, default=10)
     parser.add_argument('--snapshot_iter', type=int, default=10)
-    parser.add_argument('--snapshots_folder', type=str, default="snapshots_Retinex/")  # 这个参数现在不再使用
     parser.add_argument('--load_pretrain', type=bool, default=False)
     parser.add_argument('--pretrain_dir', type=str, default="snapshots_Retinex/Epoch_99.pth")
 
