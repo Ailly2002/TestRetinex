@@ -243,10 +243,6 @@ def train(config):
 
         for iteration, (input_img, gt_img) in enumerate(train_loader):
             batch_count += 1
-            # 数据归一化并移至GPU（防止 dataset 返回 [0,255] 的 uint8）
-            #            # 数据移至GPU
-            #            input_img = input_img.cuda()
-            #            gt_img = gt_img.cuda()
             input_img = _ensure_tensor_0_1(input_img)
             gt_img = _ensure_tensor_0_1(gt_img)
             input_img = input_img.cuda()

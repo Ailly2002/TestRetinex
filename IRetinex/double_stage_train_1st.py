@@ -7,9 +7,7 @@ from tqdm import tqdm
 import logging
 import numpy as np
 
-# 导入核心模块（与你的train.py保持一致）
 from models.main_model import IRetinex
-from models.ZeroDCEloss import L_color as LColorClass, L_spa as LSpaClass, L_exp as LExpClass, L_TV as LTVClass
 from data_loader import RetinexDataset  # 你的数据加载类
 
 def main():
@@ -22,9 +20,6 @@ def main():
     lr = 1e-4
     epochs = 30
     weight_decay = 1e-5
-    # 新增：L 图监督权重与稳定项 eps
-    illum_weight = 5.0
-    illum_eps = 1e-8
     num_workers = 4 if torch.cuda.is_available() else 0
     save_dir = "checkpoints/phase1"
     os.makedirs(save_dir, exist_ok=True)
@@ -41,7 +36,7 @@ def main():
         handlers=[logging.StreamHandler()]
     )
 
-    # 加载数据集（现在在 main 内，避免 spawn 时重复导入执行）
+    # 加载数据集（低光Input + 高光GT成对样本）
     train_dataset = RetinexDataset(
         input_root=input_root,
         gt_root=gt_root,
@@ -57,24 +52,17 @@ def main():
     )
     logging.info(f"训练集加载完成：{len(train_dataset)} 对样本 | {len(train_loader)} 个批次")
 
-    # 模型初始化 + 参数冻结
+    # 模型初始化 + 参数冻结（仅解冻dual_color和reflectance_decomp）
     model = IRetinex().to(device)
     for param in model.parameters():
-        param.requires_grad = False
+        param.requires_grad = False  # 冻结所有参数
+    # 仅解冻光照分支和反射率分解分支（核心训练模块）
     for param in model.dual_color.parameters():
         param.requires_grad = True
     for param in model.reflectance_decomp.parameters():
         param.requires_grad = True
 
-    # 初始化 ZeroDCE 风格的损失（注意 L_spa 构造里使用了 .cuda()，需在 CUDA 可用时运行）
-    try:
-        L_color = LColorClass().to(device)
-        L_spa = LSpaClass().to(device)
-        L_exp = LExpClass(16).to(device)
-        L_TV = LTVClass().to(device)
-    except Exception as e:
-        raise RuntimeError("初始化 ZeroDCEloss 时出错（可能需要 CUDA 可用）。错误: " + str(e))
-
+    # 优化器：仅更新解冻的参数
     optimizer = optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=lr,
@@ -88,47 +76,51 @@ def main():
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{epochs}]")
 
         for batch_idx, (low_light_imgs, gt_imgs) in enumerate(pbar):
+            # 数据预处理：移至指定设备 + 转换精度
             low_light_imgs = low_light_imgs.to(device, dtype=torch.float32)
             gt_imgs = gt_imgs.to(device, dtype=torch.float32)
 
-            L_init = model.dual_color(low_light_imgs)
-            R_init = model.reflectance_decomp(low_light_imgs, L_init)
+            # ---------------------- 核心修改：分别计算Input和GT的R_init ----------------------
+            # 1. 低光Input经模型分解得到 R_init_low
+            L_init_low = model.dual_color(low_light_imgs)
+            R_init_low = model.reflectance_decomp(low_light_imgs, L_init_low)
 
-            # 计算各项损失（按示例权重）
-            Loss_TV = 1600.0 * L_TV(L_init)
-            loss_spa = torch.mean(L_spa(R_init, low_light_imgs))
-            loss_col = 5.0 * torch.mean(L_color(R_init))
-            loss_exp = 10.0 * torch.mean(L_exp(R_init, 0.6))
+            # 2. GT图经模型分解得到 R_init_gt
+            L_init_gt = model.dual_color(gt_imgs)
+            R_init_gt = model.reflectance_decomp(gt_imgs, L_init_gt)
 
-            # 新增：用 Input / (GT + eps) 监督 L 图（L1）
-            # 避免除零并控制范围
-            target_L = low_light_imgs / (gt_imgs + illum_eps)
-            target_L = torch.clamp(target_L, 0.0, 1.0)
-            loss_illum = illum_weight * torch.mean(torch.abs(L_init - target_L))
+            # 3. 计算两个R_init的L1损失（作为第一阶段唯一训练损失）
+            loss = nn.functional.l1_loss(R_init_low, R_init_gt)
+            # -----------------------------------------------------------------------------
 
-            # 将 illumination 监督加入总损失
-            loss = Loss_TV + loss_spa + loss_col + loss_exp + loss_illum
-
+            # 反向传播 + 参数更新
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            # 损失统计 + 进度条更新
             epoch_loss += loss.item()
             avg_loss = epoch_loss / (batch_idx + 1)
-            pbar.set_postfix({"loss": f"{loss.item():.6f}", "avg_loss": f"{avg_loss:.6f}", "loss_illum": f"{loss_illum.item():.6f}"})
+            pbar.set_postfix({
+                "batch_loss": f"{loss.item():.6f}",
+                "avg_loss": f"{avg_loss:.6f}"
+            })
 
+        # 每轮训练结束后保存模型权重
         save_path = os.path.join(save_dir, f"phase1_epoch_{epoch}.pth")
         torch.save({
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "loss": avg_loss
+            "avg_loss": avg_loss
         }, save_path)
-        logging.info(f"Epoch {epoch} 保存至 {save_path} | 平均损失：{avg_loss:.6f}")
+        logging.info(f"Epoch {epoch} 保存至 {save_path} | 本轮平均L1损失：{avg_loss:.6f}")
 
     logging.info("第一阶段训练完成！")
 
+
 if __name__ == '__main__':
     from multiprocessing import freeze_support
+
     freeze_support()
     main()
