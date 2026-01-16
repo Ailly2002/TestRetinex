@@ -10,6 +10,39 @@ import numpy as np
 from models.main_model import IRetinex
 from data_loader import RetinexDataset  # 你的数据加载类
 
+# 新增：用于绘制训练曲线的简单函数（Loss, PSNR, SSIM）
+import matplotlib.pyplot as plt
+import datetime
+from utils import calculate_psnr, calculate_ssim  # 假定项目已有 utils 中实现
+
+def plot_training_metrics(epoch_metrics, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    epochs = [m['epoch'] for m in epoch_metrics]
+    losses = [m['loss'] for m in epoch_metrics]
+    psnrs = [m['psnr'] for m in epoch_metrics]
+    ssims = [m['ssim'] for m in epoch_metrics]
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, losses, '-o', label='Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'loss_curve.png'))
+    plt.close()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(epochs, psnrs, '-o', label='PSNR (dB)')
+    plt.plot(epochs, ssims, '-o', label='SSIM')
+    plt.xlabel('Epoch')
+    plt.ylabel('Value')
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'psnr_ssim_curve.png'))
+    plt.close()
+
 def main():
     # ====================== 基础参数设置 ======================
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,8 +105,16 @@ def main():
 
     # 训练循环
     model.train()
+
+    # 新增：用于记录每轮指标
+    epoch_metrics = []
+
     for epoch in range(1, epochs + 1):
         epoch_loss = 0.0
+        epoch_psnr = 0.0
+        epoch_ssim = 0.0
+        sample_count = 0
+
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{epochs}]")
 
         for batch_idx, (low_light_imgs, gt_imgs) in enumerate(pbar):
@@ -127,6 +168,22 @@ def main():
 
             # 损失统计 + 进度条更新
             epoch_loss += loss.item()
+
+            # 评估指标统计：使用 I_init_gt 与 GT 计算 PSNR/SSIM（也可使用 I_init_low 与 low_light）
+            # 将单张图转换为 numpy [0,255,H,W->H,W,C] 供 utils 函数使用
+            with torch.no_grad():
+                I_gt_np = (I_init_gt.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255.0).astype(np.float32)
+                gt_np = (gt_imgs.detach().cpu().numpy().transpose(0, 2, 3, 1) * 255.0).astype(np.float32)
+                batch_psnr = 0.0
+                batch_ssim = 0.0
+                bs = I_gt_np.shape[0]
+                for b in range(bs):
+                    batch_psnr += calculate_psnr(I_gt_np[b], gt_np[b])
+                    batch_ssim += calculate_ssim(I_gt_np[b], gt_np[b])
+                epoch_psnr += batch_psnr
+                epoch_ssim += batch_ssim
+                sample_count += bs
+
             avg_loss = epoch_loss / (batch_idx + 1)
             pbar.set_postfix({
                 "batch_loss": f"{loss.item():.6f}",
@@ -143,7 +200,33 @@ def main():
         }, save_path)
         logging.info(f"Epoch {epoch} 保存至 {save_path} | 本轮平均L1损失：{avg_loss:.6f}")
 
+        # 计算并记录本轮平均指标（PSNR/SSIM 按像素样本数归一）
+        if sample_count > 0:
+            avg_epoch_psnr = epoch_psnr / sample_count
+            avg_epoch_ssim = epoch_ssim / sample_count
+        else:
+            avg_epoch_psnr = 0.0
+            avg_epoch_ssim = 0.0
+
+        epoch_metrics.append({
+            'epoch': epoch,
+            'loss': avg_loss,
+            'psnr': avg_epoch_psnr,
+            'ssim': avg_epoch_ssim
+        })
+
+        # 每轮结束时绘图并保存（逐轮更新图像）
+        try:
+            plot_training_metrics(epoch_metrics, save_dir)
+        except Exception as e:
+            logging.warning(f"Plotting failed at epoch {epoch}: {e}")
+
     logging.info("第一阶段训练完成！")
+    # 最后再保存一次完整的曲线图
+    try:
+        plot_training_metrics(epoch_metrics, save_dir)
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
