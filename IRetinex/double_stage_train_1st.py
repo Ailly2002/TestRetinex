@@ -21,7 +21,8 @@ def main():
     epochs = 30
     weight_decay = 1e-5
     num_workers = 4 if torch.cuda.is_available() else 0
-    save_dir = "checkpoints/phase1"
+    # save_dir = "checkpoints/phase1"
+    save_dir = "checkpoints/phase1_351"
     os.makedirs(save_dir, exist_ok=True)
     seed = 43
     torch.manual_seed(seed)
@@ -89,8 +90,34 @@ def main():
             L_init_gt = model.dual_color(gt_imgs)
             R_init_gt = model.reflectance_decomp(gt_imgs, L_init_gt)
 
-            # 3. 计算两个R_init的L1损失（作为第一阶段唯一训练损失）
-            loss = nn.functional.l1_loss(R_init_low, R_init_gt)
+            # 3. 计算损失：保留原有 R_init 之间的 L1，同时新增 I_init 的重建损失
+            #    I_init = R_init * L_init，与对应输入图像比较
+            # 兼容通道不匹配：若 L 为单通道则广播，否则尝试裁剪/重复以匹配 R 的通道数
+            def _align_and_mul(R, L):
+                if L.shape[1] != R.shape[1]:
+                    if L.shape[1] == 1:
+                        L = L.repeat(1, R.shape[1], 1, 1)
+                    elif R.shape[1] == 1:
+                        R = R.repeat(1, L.shape[1], 1, 1)
+                    else:
+                        # 最简单的处理：如果通道不匹配，按最小通道数裁剪多余通道
+                        min_c = min(R.shape[1], L.shape[1])
+                        R = R[:, :min_c, ...]
+                        L = L[:, :min_c, ...]
+                return R * L
+
+            I_init_low = _align_and_mul(R_init_low, L_init_low)
+            I_init_gt = _align_and_mul(R_init_gt, L_init_gt)
+
+            # 原有的 R_init 之间的 L1 损失
+            loss_R = nn.functional.l1_loss(R_init_low, R_init_gt)
+
+            # 新增的 I_init 与对应输入图像的 L1 损失
+            loss_I_low = nn.functional.l1_loss(I_init_low, low_light_imgs)
+            loss_I_gt = nn.functional.l1_loss(I_init_gt, gt_imgs)
+
+            # 最终第一阶段损失：三项相加
+            loss = loss_R + loss_I_low + loss_I_gt
             # -----------------------------------------------------------------------------
 
             # 反向传播 + 参数更新
