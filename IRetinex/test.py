@@ -255,9 +255,10 @@ def main():
     args = SimpleNamespace(
         test_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/low',
         gt_root=r'E:/Low-LightDatasets/Images/LOLdataset/eval15/high',
-        save_root=r'E:/Experiences/LOL/IRetinex/20260115_102445_epoch300',
-        # model_path=r'./snapshot/20260105_225353/Epoch_100_20260105_225353.pth',
-        model_path = r'./snapshot/20260115_102445/Epoch_300_20260115_102445.pth',
+        save_root=r'E:/Experiences/LOL/IRetinex/20260115_202901_best',
+        # save_root=r'E:/Experiences/LOL/IRetinex/phase1',
+        model_path=r'./snapshot/20260115_202901/best_model_20260115_202901.pth',
+        # model_path = r'./checkpoints/phase1/phase1_epoch_30.pth',
         scale_factor=12,
         gpu_id='0'
     )

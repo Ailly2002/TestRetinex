@@ -9,18 +9,19 @@ class DualColorSpacePrior(nn.Module):
     """双色空间先验模块 (严格遵循论文公式(9)和(10))"""
     def __init__(self):
         super(DualColorSpacePrior, self).__init__()
-        mid_channels = 32
+        input_channels = 5  # 3 (I_l) + 1 (Lrgb) + 1 (Lhsv)
+        mid_channels = 40
         # 1x1 -> 5x5 depthwise -> 1x1 -> ReLU
         self.prior_net = nn.Sequential(
-            nn.Conv2d(5, mid_channels, kernel_size=1, stride=1, padding=0, bias=True),
-            # nn.BatchNorm2d(mid_channels),
-            # nn.ReLU(inplace=True),
-
-            nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
+            nn.Conv2d(input_channels, mid_channels, kernel_size=1, stride=1, padding=0, bias=True, padding_mode='replicate'),
             # nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
 
-            nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True, padding_mode='replicate'),  # depthwise
+            # nn.BatchNorm2d(mid_channels),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(mid_channels, 3, kernel_size=1, stride=1, padding=0, bias=True, padding_mode='replicate'),
             # nn.BatchNorm2d(3),
             # nn.Sigmoid(),
             nn.ReLU(inplace=True)
@@ -50,12 +51,13 @@ class ReflectanceDecomposition(nn.Module):
     """反射率分解模块 (严格遵循论文3.3节公式(10))"""
     def __init__(self):
         super(ReflectanceDecomposition, self).__init__()
-        mid_channels = 32
+        input_channels = 6  # 3 (I_l) + 3 (softmax部分)
+        mid_channels = 40
         # 使用 nn.Sequential: 1x1 -> BN -> ReLU -> 5x5 depthwise -> BN -> ReLU -> 1x1 -> BN -> ReLU
         self.reflect_net = nn.Sequential(
-            nn.Conv2d(6, mid_channels, kernel_size=1, stride=1, padding=0, bias=True),
+            nn.Conv2d(input_channels, mid_channels, kernel_size=1, stride=1, padding=0, bias=True),
             # nn.BatchNorm2d(mid_channels),
-            # nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True),
 
             nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True),  # depthwise
             # nn.BatchNorm2d(mid_channels),
