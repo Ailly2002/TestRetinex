@@ -16,7 +16,7 @@ class DualColorSpacePrior(nn.Module):
             nn.Conv2d(input_channels, mid_channels, kernel_size=3, stride=1, padding=1,groups=1, bias=True, padding_mode='replicate'),
             # nn.BatchNorm2d(mid_channels),
             nn.ReLU(inplace=True),
-            nn.GELU(),
+            # nn.GELU(),
 
             nn.Conv2d(mid_channels, mid_channels, kernel_size=5, stride=1, padding=2, groups=mid_channels, bias=True, padding_mode='replicate'),  # depthwise
             # nn.BatchNorm2d(mid_channels),
