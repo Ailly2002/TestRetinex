@@ -5,6 +5,8 @@ import numpy as np
 import argparse
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import random                            # <--- 新增导入
 import matplotlib.pyplot as plt
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
@@ -15,7 +17,6 @@ from models import IRetinex, MultiScaleConsistencyLoss
 import data_loader
 from utils import save_model, visualize_results, calculate_psnr, calculate_ssim, load_model
 import datetime
-import torch.nn.functional as F
 import math  # 新增：用于计算累积步数
 
 # 新增：防御性归一化函数，避免重复归一化
@@ -148,6 +149,26 @@ def train(config):
     # 创建记录文件
     log_file = os.path.join(snapshot_dir, f"training_log_{timestamp}.txt")
 
+    # --- 新增：确定随机种子（优先使用 config.seed，否则生成一个随机种子） ---
+    # 保证 config 有 seed 属性（parser 下方已添加该参数）
+    seed = None
+    try:
+        seed = int(getattr(config, 'seed', None)) if getattr(config, 'seed', None) is not None else None
+    except Exception:
+        seed = None
+    if seed is None:
+        # 使用系统随机生成一个 32-bit 整数作为种子
+        seed = random.SystemRandom().randint(0, 2**31 - 1)
+    # 设置各随机源
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    # 在控制台打印并写入 training_log（接下来会写入更多信息）
+    print(f"Random seed: {seed}")
+    # --- 新增结束 ---
+
     # 写入基础信息
     with open(log_file, 'w') as f:
         f.write(f"Training Start Time: {now.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -161,6 +182,8 @@ def train(config):
         f.write(f"Number of Workers: {config.num_workers}\n")
         f.write(f"Display Iter: {config.display_iter}\n")
         f.write(f"Snapshot Iter: {config.snapshot_iter}\n")
+        # 将随机种子写入日志
+        f.write(f"Random Seed: {seed}\n")
 
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     cudnn.benchmark = True
@@ -494,13 +517,14 @@ if __name__ == "__main__":
     parser.add_argument('--image_size', type=int, default=256)
 
     # 训练超参数
-    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', type=float, default=0.0001)
     parser.add_argument('--grad_clip_norm', type=float, default=1.2)
     parser.add_argument('--num_epochs', type=int, default=300)
     parser.add_argument('--train_batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--eta_min', type=float, default=1e-5)
+    parser.add_argument('--seed', type=int, default=None)  # 新增：随机种子参数
 
     # 日志与快照参数
     parser.add_argument('--display_iter', type=int, default=10)
